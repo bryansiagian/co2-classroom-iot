@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+@theme {
+  --color-fog: #eaf0ee;
+  --color-paper: #f9fbfa;
+  --color-ink: #12282b;
+  --color-muted: #587377;
+  --color-line: #cfdcd8;
+  --color-good: #2e8b6a;
+  --color-watch: #c98a12;
+  --color-high: #d4492e;
+  --color-critical: #8f2d56;
+}
+
+@theme inline {
+  --font-sans: var(--font-schibsted), ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background: var(--color-fog);
+  color: var(--color-ink);
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.live-dot {
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+}
