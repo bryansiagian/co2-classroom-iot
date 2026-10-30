@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+data/demo/*
+data/real/*
+data/processed/*
+models/demo/*
+models/real/*
+reports/*
+!**/.gitkeep
+!data/demo/sample_head.csv
