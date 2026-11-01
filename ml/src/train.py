@@ -3,6 +3,7 @@
 Contoh:
     python -m src.train                       # mode dari env DATA_MODE (default demo)
     python -m src.train --windows 15 30 60 --epochs 60
+    python -m src.train --val-start 2026-09-22 --test-start 2026-09-24
     python -m src.train --mode real
 
 Keluaran (di models/<mode>/ dan reports/<mode>/):
@@ -26,7 +27,14 @@ from torch.utils.data import DataLoader, TensorDataset
 from . import config, metrics
 from .guard import assert_mode_safe
 from .models import Persistence, RNNForecaster, count_params
-from .windows import Scaler, fit_scaler, make_windows, select_features, split_bounds
+from .windows import (
+    Scaler,
+    fit_scaler,
+    make_windows,
+    select_features,
+    split_bounds,
+    split_bounds_by_date,
+)
 
 
 def set_seed(seed: int) -> None:
@@ -44,6 +52,20 @@ def predict_ppm(model: nn.Module, X: np.ndarray, scaler: Scaler, device: str) ->
             xb = torch.from_numpy(X[i : i + 1024]).to(device)
             outs.append(model(xb).cpu().numpy())
     return scaler.inverse_target(np.concatenate(outs, axis=0))
+
+
+def weekday_metrics(actual: np.ndarray, pred: np.ndarray, t_end) -> dict:
+    """Metrik t+15 hanya pada hari kuliah (Senin-Jumat), agar akhir pekan yang datar
+    tidak membuat angka terlihat bagus/jelek secara menyesatkan."""
+    m = np.asarray(pd.DatetimeIndex(t_end).dayofweek < 5)
+    if m.sum() < 10:
+        return {"MAE_t15_kuliah": np.nan, "RMSE_t15_kuliah": np.nan, "R2_t15_kuliah": np.nan}
+    y, p = actual[m, -1], pred[m, -1]
+    return {
+        "MAE_t15_kuliah": metrics.mae(y, p),
+        "RMSE_t15_kuliah": metrics.rmse(y, p),
+        "R2_t15_kuliah": metrics.r2(y, p),
+    }
 
 
 def fit(model, Xtr, Ytr, Xva, Yva, epochs, batch, lr, patience, device):
@@ -100,6 +122,8 @@ def main() -> None:
     ap.add_argument("--layers", type=int, default=2)
     ap.add_argument("--dropout", type=float, default=0.2)
     ap.add_argument("--seed", type=int, default=config.SEED)
+    ap.add_argument("--val-start", default=None, help="tanggal awal validasi, mis. 2026-09-22")
+    ap.add_argument("--test-start", default=None, help="tanggal awal uji, mis. 2026-09-24")
     a = ap.parse_args()
 
     mode = config.get_mode(a.mode)
@@ -113,7 +137,17 @@ def main() -> None:
     set_seed(a.seed)
     df = pd.read_csv(clean_path, parse_dates=["timestamp"])
     features = select_features(df)
-    bounds = split_bounds(len(df))
+    if a.val_start and a.test_start:
+        bounds = split_bounds_by_date(df, a.val_start, a.test_start)
+    elif a.val_start or a.test_start:
+        raise SystemExit("Isi --val-start DAN --test-start bersamaan.")
+    else:
+        bounds = split_bounds(len(df))
+    split_info = {
+        k: [str(df["timestamp"].iloc[lo]), str(df["timestamp"].iloc[hi - 1])] for k, (lo, hi) in bounds.items()
+    }
+    for k, (lo, hi) in bounds.items():
+        print(f"  {k:5s}: {split_info[k][0]} -> {split_info[k][1]}  ({(hi - lo) / 1440:.1f} hari)")
     scaler = fit_scaler(df, features, bounds["train"])  # hanya dari bagian train
     ti = features.index(config.TARGET)
     print(f"Mode={mode} device={device} fitur={features} baris={len(df)} split={bounds}")
@@ -146,8 +180,10 @@ def main() -> None:
     Xte, _, Yte_raw, te_test = subset(N0, "test")
     pers = Persistence(ti)
     p_pers = scaler.inverse_target(pers.predict(Xte))
-    s = metrics.summary(Yte_raw, p_pers)
-    rows.append({"model": "persistence", "N": N0, "params": 0, "val_RMSE_t15": np.nan, **s})
+    s = {**metrics.summary(Yte_raw, p_pers), **weekday_metrics(Yte_raw, p_pers, te_test)}
+    Xva0, _, Yva0_raw, _ = subset(N0, "val")
+    pers_val_rmse = metrics.rmse(Yva0_raw[:, -1], scaler.inverse_target(pers.predict(Xva0))[:, -1])
+    rows.append({"model": "persistence", "N": N0, "params": 0, "val_RMSE_t15": pers_val_rmse, **s})
     pdir = p["models_dir"] / "persistence"
     pdir.mkdir(exist_ok=True)
     np.savez(pdir / "test_predictions.npz", pred=p_pers, actual=Yte_raw, t_end=te_test.astype("datetime64[ns]"))
@@ -167,7 +203,7 @@ def main() -> None:
             pva = predict_ppm(model, Xva, scaler, device)
             pte = predict_ppm(model, Xte, scaler, device)
             val_rmse = metrics.rmse(Yva_raw[:, -1], pva[:, -1])
-            s = metrics.summary(Yte_raw, pte)
+            s = {**metrics.summary(Yte_raw, pte), **weekday_metrics(Yte_raw, pte, te_test)}
             rows.append({"model": kind, "N": N, "params": count_params(model), "val_RMSE_t15": val_rmse, **s})
             hist.to_csv(p["reports_dir"] / f"history_{kind}_N{N}.csv", index=False)
             print(
@@ -205,6 +241,7 @@ def main() -> None:
             "step_min": config.STEP_MIN,
             "val_RMSE_t15": b["val_rmse"],
             "trained_on_rows": len(df),
+            "split": split_info,
             "torch_version": torch.__version__,
         }
         (d / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
