@@ -67,6 +67,20 @@ def split_bounds(n_rows: int, split=config.SPLIT) -> dict[str, tuple[int, int]]:
     return {"train": (0, a), "val": (a, b), "test": (b, n_rows)}
 
 
+def split_bounds_by_date(df: pd.DataFrame, val_start: str, test_start: str) -> dict[str, tuple[int, int]]:
+    """Batas split berdasarkan tanggal: train < val_start <= val < test_start <= test."""
+    ts = df["timestamp"]
+    v = int(ts.searchsorted(pd.Timestamp(val_start)))
+    t = int(ts.searchsorted(pd.Timestamp(test_start)))
+    n = len(df)
+    if not (0 < v < t < n):
+        raise SystemExit(
+            f"Tanggal split tidak valid: val_start={val_start}, test_start={test_start}. "
+            f"Data mencakup {ts.iloc[0]} sampai {ts.iloc[-1]}."
+        )
+    return {"train": (0, v), "val": (v, t), "test": (t, n)}
+
+
 def fit_scaler(df: pd.DataFrame, features: list[str], train_range: tuple[int, int]) -> Scaler:
     tr = df.iloc[train_range[0] : train_range[1]][features]
     mean = tr.mean().to_numpy(dtype=float)
