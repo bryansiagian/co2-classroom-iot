@@ -3,9 +3,9 @@
   "timestamp": "timestamp",
   "co2_ppm": "co2_ppm",
   "temp_in_c": "temp_in_c",
-  "hum_in_pct": "hum_in_pct",
-  "temp_out_c": "temp_out_c",
-  "hum_out_pct": "hum_out_pct",
+  "hum_in_pct": "rh_in_pct",
+  "temp_out_c": null,
+  "hum_out_pct": null,
   "pir": "pir",
   "_timestamp_format": null,
   "_timezone": null
