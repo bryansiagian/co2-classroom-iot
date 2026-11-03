@@ -24,10 +24,13 @@ class Settings:
 
     mqtt_enabled: bool = _bool("MQTT_ENABLED", True)
     mqtt_host: str = os.getenv("MQTT_HOST", "localhost")
-    mqtt_port: int = int(os.getenv("MQTT_PORT", "1883"))
+    mqtt_port: int = int(os.getenv("MQTT_PORT", "8883"))
     mqtt_username: str = os.getenv("MQTT_USERNAME", "")
     mqtt_password: str = os.getenv("MQTT_PASSWORD", "")
-    mqtt_topic_prefix: str = os.getenv("MQTT_TOPIC_PREFIX", "co2class")
+    mqtt_topic_prefix: str = os.getenv("MQTT_TOPIC_PREFIX", "classroom")
+    mqtt_sensor_topic: str = os.getenv("MQTT_SENSOR_TOPIC", "classroom/gd525/sensors")
+    mqtt_tls_enabled: bool = _bool("MQTT_TLS_ENABLED", True)
+    mqtt_ca_cert: str = os.getenv("MQTT_CA_CERT", "/etc/mosquitto/certs/server.crt")
 
     db_path: str = os.getenv("DB_PATH", str(BACKEND_DIR / "data" / "co2class.db"))
     schema_path: str = os.getenv("DB_SCHEMA_PATH", str(REPO_ROOT / "database" / "schema.sql"))
