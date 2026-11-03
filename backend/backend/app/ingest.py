@@ -54,7 +54,21 @@ class Pipeline:
             payload.decode("utf-8", "replace") if isinstance(payload, bytes) else json.dumps(payload))
         try:
             msg = json.loads(raw)
-            if not isinstance(msg, dict) or not msg.get("device_id"):
+            if not isinstance(msg, dict):
+                raise ValueError("Payload harus berupa objek JSON")
+            # Adapter untuk firmware ESP32 V3 (format pendek).
+            # Kontrak data lama tetap didukung untuk simulator/tests.
+            if {"co2", "temperature", "humidity", "pir"}.issubset(msg):
+                msg = {
+                    "device_id": "esp32_gd525",
+                    "co2_ppm": msg["co2"],
+                    "temp_in_c": msg["temperature"],
+                    "hum_in_pct": msg["humidity"],
+                    "pir": msg["pir"],
+                    "ts": None,
+                    "faults": [],
+                }
+            if not msg.get("device_id"):
                 raise ValueError("device_id wajib ada")
         except (ValueError, TypeError) as e:
             log.warning("Pesan sensor ditolak (%s): %.120s", e, raw)
