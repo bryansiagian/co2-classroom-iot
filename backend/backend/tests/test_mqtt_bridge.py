@@ -29,17 +29,17 @@ def test_sensor_message_is_stored_and_recommendation_published():
     db, bridge, published = make()
     now = utcnow()
     payload = json.dumps(sensor_message(int(now.timestamp() // 60), to_iso(now), seq=0)).encode()
-    bridge._on_message(None, None, SimpleNamespace(topic="co2class/gd525/sensor", payload=payload))
+    bridge._on_message(None, None, SimpleNamespace(topic="classroom/gd525/sensors", payload=payload))
     assert db.query("SELECT COUNT(*) c FROM sensor_reading")[0]["c"] == 1
     topic, body, qos, retain = published[-1]
-    assert topic == "co2class/gd525/recommendation" and qos == 1 and retain is True
+    assert topic == "classroom/gd525/recommendation" and qos == 1 and retain is True
     assert body["action"] in {"none", "watch", "flush"}
 
 
 def test_status_message_and_garbage_do_not_crash():
     db, bridge, _ = make()
-    bridge._on_message(None, None, SimpleNamespace(topic="co2class/gd525/status", payload=b"online"))
+    bridge._on_message(None, None, SimpleNamespace(topic="classroom/gd525/status", payload=b"online"))
     assert bridge.device_status["gd525"] == "online"
-    bridge._on_message(None, None, SimpleNamespace(topic="co2class/gd525/sensor", payload=b"\xff\xfe"))
+    bridge._on_message(None, None, SimpleNamespace(topic="classroom/gd525/sensors", payload=b"\xff\xfe"))
     bridge._on_message(None, None, SimpleNamespace(topic="salah/topik", payload=b"{}"))
     assert db.query("SELECT COUNT(*) c FROM sensor_reading")[0]["c"] == 0
