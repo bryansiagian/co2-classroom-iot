@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+import ssl
+from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
@@ -20,6 +22,15 @@ class MqttBridge:
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="co2class-backend")
         if settings.mqtt_username:
             self._client.username_pw_set(settings.mqtt_username, settings.mqtt_password or None)
+        if settings.mqtt_enabled and settings.mqtt_tls_enabled:
+            cert = Path(settings.mqtt_ca_cert).expanduser()
+            if not cert.is_file():
+                raise FileNotFoundError(f"Sertifikat MQTT CA tidak ditemukan: {cert}")
+            self._client.tls_set(
+                ca_certs=str(cert),
+                cert_reqs=ssl.CERT_REQUIRED,
+                tls_version=ssl.PROTOCOL_TLS_CLIENT,
+            )
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
@@ -49,21 +60,27 @@ class MqttBridge:
             log.error("MQTT gagal tersambung: %s", reason_code)
             return
         p = self.s.mqtt_topic_prefix
-        client.subscribe([(f"{p}/+/sensor", 1), (f"{p}/+/status", 1)])
-        log.info("MQTT tersambung, subscribe %s/+/sensor dan %s/+/status", p, p)
+        topics = [(self.s.mqtt_sensor_topic, 1), (f"{p}/+/status", 1)]
+        client.subscribe(topics)
+        log.info("MQTT tersambung, subscribe %s", topics)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
         log.warning("MQTT terputus (%s), akan mencoba lagi", reason_code)
 
     def _on_message(self, client, userdata, msg):
         try:
+            # Terima topic ESP32 aktual. Format lama tetap diterima
+            # oleh callback untuk kompatibilitas pengujian lama.
+            if msg.topic == self.s.mqtt_sensor_topic:
+                self.pipeline.handle_sensor_message(self.s.room_id, msg.payload)
+                return
             parts = msg.topic.split("/")
             if len(parts) != 3:
                 return
-            _, room_id, kind = parts
-            if kind == "sensor":
+            prefix, room_id, kind = parts
+            if prefix == "co2class" and kind == "sensor":
                 self.pipeline.handle_sensor_message(room_id, msg.payload)
-            elif kind == "status":
+            elif prefix in (self.s.mqtt_topic_prefix, "co2class") and kind == "status":
                 self.device_status[room_id] = msg.payload.decode("utf-8", "replace").strip()
                 log.info("Status perangkat %s: %s", room_id, self.device_status[room_id])
         except Exception:
