@@ -16,6 +16,12 @@ secrets.h
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
+
+# Database backups
+backups/*.db
+backups/*.db-*
 
 # Private keys
 *.key
