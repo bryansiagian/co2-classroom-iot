@@ -71,9 +71,24 @@ class MqttBridge:
         try:
             # Terima topic ESP32 aktual. Format lama tetap diterima
             # oleh callback untuk kompatibilitas pengujian lama.
-            if msg.topic == self.s.mqtt_sensor_topic:
-                self.pipeline.handle_sensor_message(self.s.room_id, msg.payload)
-                return
+           if msg.topic == self.s.mqtt_sensor_topic:
+            log.info("MQTT menerima data: %s", msg.payload.decode("utf-8", "replace"))
+
+            result = self.pipeline.handle_sensor_message(
+                self.s.room_id,
+                msg.payload
+            )
+
+            if result is not None:
+                log.info(
+                    "Data berhasil diproses: CO2=%s ppm | flags=%s",
+                    result["co2_ppm"],
+                    result["flags"]
+                )
+            else:
+                log.warning("Data MQTT tidak berhasil diproses")
+
+            return
             parts = msg.topic.split("/")
             if len(parts) != 3:
                 return
