@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily CO2 Classroom Database Backup
+
+[Timer]
+OnCalendar=*-*-* 17:00:00 UTC
+Persistent=true
+Unit=co2class-backup.service
+
+[Install]
+WantedBy=timers.target

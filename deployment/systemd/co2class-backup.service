@@ -1,0 +1,8 @@
+[Unit]
+Description=Backup SQLite CO2 Classroom
+
+[Service]
+Type=oneshot
+User=bryan
+WorkingDirectory=/home/bryan/co2-classroom-iot
+ExecStart=/usr/bin/python3 /home/bryan/co2-classroom-iot/backups/backup_db.py

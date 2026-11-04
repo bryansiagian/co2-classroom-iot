@@ -1,0 +1,17 @@
+[Unit]
+Description=CO2 Classroom IoT FastAPI Backend
+Wants=network-online.target
+After=network-online.target mosquitto.service
+
+[Service]
+Type=simple
+User=bryan
+WorkingDirectory=/home/bryan/co2-classroom-iot/backend/backend
+
+ExecStart=/home/bryan/co2-classroom-iot/backend/backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
