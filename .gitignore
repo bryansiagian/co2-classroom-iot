@@ -1,0 +1,26 @@
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+.env.*
+
+# Arduino secrets
+secrets.h
+
+# Database lokal
+*.db
+*.sqlite
+*.sqlite3
+
+# Private keys
+*.key
+*.pem
+
+# Tetap izinkan file contoh konfigurasi
+!.env.example
+!.env.*.example
