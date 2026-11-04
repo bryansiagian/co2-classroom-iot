@@ -30,3 +30,6 @@ backups/*.db-*
 # Tetap izinkan file contoh konfigurasi
 !.env.example
 !.env.*.example
+
+# Development preprocessing outputs
+/ml/data/processed/development/
