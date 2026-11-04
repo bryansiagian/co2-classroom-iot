@@ -182,10 +182,15 @@ sudo ss -lntp | grep -E '1883|8883'
 - [ ] Uji ketahanan restart/reconnect berulang dan monitoring data hilang.
 - [ ] Sumber waktu perangkat yang andal; fallback waktu kompilasi bukan solusi final.
 - [ ] Backup off-server, retensi, dan uji pemulihan database.
-- [ ] Audit dataset dan penentuan awal periode pengumpulan resmi.
+- [x] Audit awal development dan preprocessing 1 menit (manual, 2 unit test lulus).
+- [ ] Penentuan awal periode pengumpulan resmi dan validasi data di GD525.
 
 ## 9. Tautan
 
 - [Arsitektur](architecture.md)
 - [Pengumpulan data](data-collection.md)
 - [Roadmap](development-roadmap.md)
+
+## 10. Catatan migrasi dokumentasi
+
+Panduan historis `05-setup-dan-operasional.md` menggambarkan collector V3 berumur 15 menit. Saat ini sumber penyimpanan utama adalah backend FastAPI pada H200 melalui `systemd`, bukan `~/gd525-iot-test/collector.py`. Skrip dan database lama tetap arsip, bukan sumber penelitian resmi. Lihat [kontrak data](data-contract.md) dan [keputusan/risiko](decisions-and-risks.md).

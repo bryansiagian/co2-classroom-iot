@@ -22,7 +22,7 @@ Metadata manual yang dianjurkan: jadwal kelas, perkiraan/rekap presensi, kondisi
 
 ESP32 V4.1 mengirim payload JSON kira-kira setiap **10 detik** ke topik `classroom/gd525/sensors` menggunakan MQTT/TLS. Backend FastAPI menyimpan pembacaan mentah ke tabel `sensor_reading` pada SQLite H200.
 
-Data 10 detik **dipertahankan** untuk audit dan dapat diubah menjadi grid **1 menit** di tahap preprocessing. Jangan menganggap file CSV atau tabel 1 menit telah otomatis dibuat saat ini.
+Data 10 detik **dipertahankan** untuk audit dan kini telah diuji bisa diubah menjadi grid **1 menit** lewat `ml/preprocessing/resample_sensor_data.py`. Preprocessing dijalankan **manual**, bukan layanan otomatis; output development tidak sama dengan dataset resmi GD525.
 
 Contoh payload:
 
@@ -56,18 +56,33 @@ Minimal audit harian/berkala:
 
 Validasi ingest yang diketahui mencatat flag `suspect` jika CO₂ di luar 350–5000 ppm, suhu di luar -10–60 °C, atau RH di luar 0–100%; keputusan final untuk membuang/menandai sampel perlu dijelaskan pada protokol eksperimen.
 
-## 6. Rencana preprocessing 1 menit
+## 6. Preprocessing 1 menit — sudah diuji pada data development
 
-**Belum diimplementasikan sebagai hasil dataset resmi.** Rencana yang disarankan:
+Implementasi: `ml/preprocessing/resample_sensor_data.py`; pengujian di `ml/preprocessing/tests/` telah menghasilkan **2 unit test lulus**. Kode membaca SQLite secara read-only, membentuk grid UTC per menit, agregasi **rata-rata** CO₂/suhu/RH dan **maksimum** PIR. Menit lengkap yang memenuhi minimal **5 dari 6** sampel valid ditandai `usable`; status lain antara lain `incomplete`, `missing`, `boundary_partial`. Tersedia `n_received`, `n_valid`, `n_rejected`, `coverage_pct`.
 
-1. Urutkan berdasarkan timestamp UTC penerimaan yang tervalidasi dan identitas ruang.
-2. Bentuk grid 1 menit tetap, tanpa menggunakan informasi dari masa depan.
-3. Agregasi CO₂, suhu, RH dengan statistik yang ditentukan sebelumnya (misalnya median dalam 1 menit), dan PIR dengan `max` (ada/tidak ada gerakan).
-4. Catat jumlah sampel mentah per menit (`sample_count`) serta indikator gap/kelengkapan.
-5. Tandai menit kosong sebagai missing; tetapkan aturan imputasi hanya pada data train, kemudian terapkan tanpa leakage ke validation/test.
-6. Simpan output terpisah dan ber-versi; jangan menimpa raw sensor readings.
+Contoh jalankan dari root repository pada H200:
 
-Bila PIR sensor tetap HIGH sekitar puluhan detik setelah pemicuan, agregasi PIR perlu diperlakukan sebagai indikator aktivitas kasar, bukan okupansi atau jumlah gerakan aktual.
+```bash
+python3 -m unittest discover -s ml/preprocessing/tests -v
+python3 ml/preprocessing/resample_sensor_data.py
+```
+
+Output default ke `ml/data/processed/development/`: `all_minutes.csv`, `usable_minutes.csv`, `resample_report.json`. **Tidak ada interpolasi otomatis.** Saat membangun sliding window GRU, validasi kontinuitas timestamp harus menggunakan grid lengkap, jangan menyambungkan baris `usable_minutes.csv` yang terpisah gap.
+
+Hasil pengujian development tercatat: **456 raw rows → 78 menit, 73 usable, 3 incomplete, 2 boundary, 0 missing**, hanya untuk contoh kesiapan pipeline. Threshold 5/6 adalah pilihan engineering awal dan perlu dinilai ulang pada data penelitian.
+
+### Audit development yang sudah dilakukan
+
+- Awal audit: 359 baris, 0 NULL pada empat fitur, 0 timestamp duplikat dan invalid, 0 nilai di luar rentang.
+- Interval rata-rata 10,34 detik; median 10 detik. Ditemukan enam gap >15 detik terkonsentrasi pada masa perpindahan backend manual ke systemd.
+- Pada subset sesudah `2026-11-04T14:07:00Z`, **379 baris** memiliki interval 8–12 detik seluruhnya dan tanpa gap >15 detik.
+- Seluruh 359 baris audit awal memiliki `ts_corrected` karena firmware tidak menyertakan timestamp; ini tidak membuktikan latensi jaringan nol.
+
+Hasil audit singkat tidak membuktikan kestabilan selama 4 minggu atau validitas nilai sensor terhadap alat referensi.
+
+### Penanganan gap untuk eksperimen
+
+Usulan lama interpolasi linear pada gap 1–3 menit **belum diterapkan**; jangan menggunakan interpolasi tanpa justifikasi dan penanda `imputed`, terlebih jika dapat menyebabkan kebocoran data dari masa depan. Window yang melewati menit tidak usable harus ditolak atau ditangani oleh strategi yang didokumentasikan.
 
 ## 7. Skema eksperimen GRU
 
@@ -90,11 +105,29 @@ Bila PIR sensor tetap HIGH sekitar puluhan detik setelah pemicuan, agregasi PIR 
 
 Ambang adalah pilihan operasional proyek dan harus diuji pada konteks ruang kelas; tidak otomatis merupakan ketentuan hukum atau ukuran keselamatan yang universal. Evaluasi juga perlu mencatat alarm palsu, keterlambatan, dan kemungkinan penggunaan hysteresis.
 
-## 9. Backup, akses, dan etika
+## 9. Pemasangan, kalibrasi, dan catatan manual
+
+### Penempatan sensor (rencana, verifikasi lapangan)
+
+| Komponen | Rekomendasi penempatan |
+|---|---|
+| MH-Z19C | Sekitar zona napas penghuni duduk (usulan 1–1,5 m), jauh dari embusan napas langsung, pintu/jendela dan ventilasi langsung |
+| DHT22 dalam | Dekat pengukuran CO₂ tetapi jauh dari panas ESP32, laptop/proyektor dan matahari |
+| PIR | Menghadap aktivitas tempat duduk, tidak terhalang; `0` bukan bukti ruangan kosong |
+| ESP32/LED | Catu daya stabil dan lokasi aman, LED terlihat; dokumentasikan posisi |
+| DHT22 luar | **Belum terpasang dalam sistem aktif**; jika ditambahkan harus terlindung hujan/panas matahari |
+
+Jangan memindahkan alat selama periode resmi tanpa mencatat waktu/alasan perubahan. Dokumentasikan foto, sketsa dan tinggi pemasangan. Periksa warm-up MH-Z19C menurut datasheet dan catat periode yang dikecualikan. Tinjau pengaturan ABC (Automatic Baseline Correction) dan uji sanity check udara luar sebelum mengambil data resmi; kebijakan kalibrasi belum final.
+
+### Event log manual, bukan input otomatis model
+
+Catat peristiwa `kelas_mulai`, `kelas_selesai`, `jendela_buka`, `jendela_tutup`, `pintu_buka`, `pintu_tutup`, `flush_dilakukan`, `lainnya`. Struktur CSV yang diusulkan: `waktu_wib,jenis,jumlah_orang_perkiraan,catatan,pencatat`. Gunakan inisial, jangan nama mahasiswa; catat apakah log per hari lengkap. Data presensi/jadwal dan pintu/jendela adalah metadata untuk analisis, bukan fitur sensor otomatis.
+
+## 10. Backup, akses, dan etika
 
 Backup H200 sudah dikonfigurasi setiap hari **17:00 UTC = 00:00 WIB**, menggunakan SQLite Backup API. Namun, backup masih di host yang sama: diperlukan backup off-server, kebijakan retensi dan uji restore. Hindari merekam data identitas pribadi dalam pembacaan sensor. Catatan presensi/manual perlu dikelola sesuai kebijakan kampus dan tujuan penelitian.
 
-## 10. Kriteria mulai periode pengumpulan resmi
+## 11. Kriteria mulai periode pengumpulan resmi
 
 - [ ] Firmware dapat berjalan melewati 15 menit dan melewati restart dengan clock tepercaya.
 - [ ] ESP32 dipasang pada posisi dan catu daya yang stabil di ruang GD525.
@@ -104,6 +137,8 @@ Backup H200 sudah dikonfigurasi setiap hari **17:00 UTC = 00:00 WIB**, menggunak
 - [ ] Prosedur metadata lapangan dan kalender pengambilan disepakati.
 - [ ] Waktu mulai, versi firmware, dan hash commit repository dicatat.
 
-## 11. Dokumen terkait
+## 12. Dokumen terkait
 
 [Arsitektur](architecture.md) · [Deployment H200](deployment-h200.md) · [Roadmap](development-roadmap.md)
+
+[Kontrak data](data-contract.md) · [Keputusan dan risiko](decisions-and-risks.md)
