@@ -16,9 +16,9 @@ Menghasilkan sistem berbasis IoT yang membaca kondisi ruang GD525, memprediksi C
 | 4. Baseline prediksi & rekomendasi | **Diuji pada pipeline** | Persistence menghasilkan 15 horizon dan rekomendasi per sampel |
 | 5. systemd backend | **Diuji** | Service `co2class-backend` enabled/active |
 | 6. Backup SQLite | **Diuji di host yang sama** | Manual backup berhasil; timer harian dijadwalkan |
-| 7. Audit kualitas data | **Berikutnya** | Gap, null, outlier, duplikat, timestamp |
+| 7. Audit kualitas data | **Audit awal lulus sementara** | 359 baris: 0 null/duplikat; 379 baris periode stabil: 8–12 detik seluruhnya |
 | 8. Pengumpulan nyata ≥4 minggu | **Belum divalidasi/dinyatakan dimulai resmi** | Perlu kesiapan perangkat, jam, kestabilan dan backup |
-| 9. Dataset 1 menit | **Direncanakan** | Agregasi dan dokumentasi missingness |
+| 9. Dataset 1 menit | **Script dan test diuji (development)** | 456 baris → 78 menit, 73 usable, 2 unit test OK; belum dataset resmi |
 | 10. GRU vs baseline | **Belum selesai** | Training, tuning, validasi dan test kronologis |
 | 11. Dashboard Next.js | **Integrasi akhir belum diverifikasi** | API, tren, prediksi, rekomendasi |
 | 12. LED proaktif di ESP32 | **Belum diverifikasi end-to-end** | Subscription rekomendasi, status LED dan pengujian |
@@ -41,9 +41,9 @@ Menghasilkan sistem berbasis IoT yang membaca kondisi ruang GD525, memprediksi C
 
 **Output:** data mentah terarsip dan dataset 1 menit tervalidasi.
 
-- [ ] Implementasikan audit kualitas data per jam/hari.
-- [ ] Deteksi interval hilang, duplikasi, missing dan outlier.
-- [ ] Implementasikan agregasi 10 detik → 1 menit.
+- [x] Jalankan audit awal data development; otomasi audit harian belum ada.
+- [x] Pemeriksaan awal interval, duplikasi, missing dan rentang telah dijalankan; audit berkelanjutan belum ada.
+- [x] Implementasikan dan uji `ml/preprocessing/resample_sensor_data.py` untuk development.
 - [ ] Pisahkan train/validation/test secara kronologis.
 - [ ] Hitung baseline persistence pada test set terpisah.
 
@@ -79,10 +79,10 @@ Menghasilkan sistem berbasis IoT yang membaca kondisi ruang GD525, memprediksi C
 
 ## Prioritas pekerjaan berikutnya
 
-1. **Audit awal** database di H200: jeda sampel, kualitas nilai, dan timestamp.
+1. **Pertahankan audit berkelanjutan** database H200; audit awal development sudah berhasil.
 2. **Perbaiki ketahanan deployment**: clock ESP32, monitoring kehilangan data dan backup off-server.
 3. **Tetapkan awal periode resmi** pengumpulan data, sekaligus metadata lapangan.
-4. **Bangun pipeline 1 menit dan baseline**, kemudian eksperimen GRU.
+4. **Bangun sliding window kontinu dan baseline**, melanjutkan script agregasi 1 menit yang sudah diuji.
 5. **Integrasikan model, dashboard dan LED**, lalu evaluasi end-to-end.
 
 ## Bukti teknis pengujian singkat
@@ -97,3 +97,5 @@ Angka di atas hanya bukti fungsi pipeline pada tahap pengembangan, **bukan** uku
 ## Dokumen terkait
 
 [README](../README.md) · [Arsitektur](architecture.md) · [Deployment](deployment-h200.md) · [Data collection](data-collection.md)
+
+[Kontrak data](data-contract.md) · [Keputusan dan risiko](decisions-and-risks.md)
