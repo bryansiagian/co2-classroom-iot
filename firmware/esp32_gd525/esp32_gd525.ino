@@ -9,24 +9,22 @@
 #include <cstring>
 #include <cstdio>
 
+#include "secrets.h"
+
 // ======================================
-// 1. WIFI DAN MQTT
+// 1. KONFIGURASI WIFI & MQTT
 // ======================================
 
 const char* WIFI_SSID = "HW-Mahasiswa";
 
 const char* MQTT_SERVER = "172.22.44.29";
-const int MQTT_PORT = 8883;
+const uint16_t MQTT_PORT = 8883;
 
 const char* MQTT_USER = "esp32_gd525";
-const char* MQTT_PASSWORD = "@Bryan2026!";
-
 const char* MQTT_TOPIC = "classroom/gd525/sensors";
 
-// PENTING:
-// Ganti blok ini dengan SERVER_CERT lengkap
-// dari firmware V2 yang sudah berhasil.
-// Sertifikat harus sama persis.
+// Sertifikat publik server MQTT H200.
+// Sertifikat sama dengan firmware V3.
 const char* SERVER_CERT = R"EOF(-----BEGIN CERTIFICATE-----
 MIIDIDCCAgigAwIBAgIUV+lqGLjwFkFpqp018p0BEDt5RI4wDQYJKoZIhvcNAQEL
 BQAwFzEVMBMGA1UEAwwMMTcyLjIyLjQ0LjI5MB4XDTI2MTEwMjEyNDQzMVoXDTI3
@@ -48,7 +46,7 @@ f8Uo5C9YhpiGMUJWQn7tLIKv8rlr+kMWoIarxVX908il/+qA
 -----END CERTIFICATE-----)EOF";
 
 // ======================================
-// 2. PIN SENSOR
+// 2. KONFIGURASI SENSOR
 // ======================================
 
 #define MH_RX_PIN 26
@@ -66,32 +64,95 @@ WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
 
 // ======================================
-// 3. PENGATURAN INTERVAL
+// 3. INTERVAL DAN STATUS
 // ======================================
 
 const unsigned long PIR_INTERVAL = 50UL;
 const unsigned long PUBLISH_INTERVAL = 10000UL;
-const unsigned long TEST_DURATION = 900000UL;
+const unsigned long RECONNECT_INTERVAL = 5000UL;
+const unsigned long NTP_RETRY_INTERVAL = 60000UL;
 
-unsigned long testStart = 0;
-unsigned long lastPublish = 0;
+const unsigned long WIFI_TIMEOUT = 15000UL;
+const unsigned long CO2_TIMEOUT = 1500UL;
+
 unsigned long lastPirCheck = 0;
-unsigned long lastReconnect = 0;
+unsigned long lastPublish = 0;
+unsigned long lastWiFiReconnect = 0;
+unsigned long lastMQTTReconnect = 0;
+unsigned long lastNtpAttempt = 0;
 
-bool testFinished = false;
+unsigned long publishCount = 0;
+unsigned long publishFailCount = 0;
 
-// Motion latch:
-// TRUE jika PIR pernah HIGH sejak
-// pengiriman sebelumnya.
 bool motionDetected = false;
 
-unsigned int publishCount = 0;
+bool timeInitialized = false;
+bool timeFromNTP = false;
 
 // ======================================
-// 4. WAKTU SEMENTARA UNTUK TLS
+// 4. MONITOR PIR
 // ======================================
 
-bool initializeTime() {
+void monitorPIR() {
+  unsigned long now = millis();
+
+  if (now - lastPirCheck < PIR_INTERVAL) {
+    return;
+  }
+
+  lastPirCheck = now;
+
+  if (digitalRead(PIR_PIN) == HIGH) {
+    motionDetected = true;
+  }
+}
+
+// ======================================
+// 5. KONEKSI WIFI
+// ======================================
+
+void connectWiFi() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+
+  Serial.println("[WiFi] Menghubungkan...");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID);
+
+  unsigned long start = millis();
+
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    millis() - start < WIFI_TIMEOUT
+  ) {
+    monitorPIR();
+    delay(10);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("[WiFi] TERHUBUNG");
+
+    Serial.print("[WiFi] IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("[WiFi] Gagal. Akan mencoba lagi.");
+  }
+}
+
+// ======================================
+// 6. FALLBACK WAKTU KOMPILASI
+// ======================================
+
+// Fallback ini mengasumsikan komputer yang
+// mengompilasi firmware berada di WIB (UTC+7).
+//
+// Digunakan untuk pengujian jika NTP gagal.
+// Bukan sumber waktu ideal untuk deployment
+// jangka panjang.
+
+bool initializeTimeFromBuild() {
   struct tm tmBuild = {};
 
   char month[4] = {};
@@ -104,10 +165,22 @@ bool initializeTime() {
     "Sep", "Oct", "Nov", "Dec"
   };
 
-  if (sscanf(__DATE__, "%3s %d %d",
-             month, &day, &year) != 3 ||
-      sscanf(__TIME__, "%d:%d:%d",
-             &hour, &minute, &second) != 3) {
+  if (
+    sscanf(
+      __DATE__,
+      "%3s %d %d",
+      month,
+      &day,
+      &year
+    ) != 3 ||
+    sscanf(
+      __TIME__,
+      "%d:%d:%d",
+      &hour,
+      &minute,
+      &second
+    ) != 3
+  ) {
     return false;
   }
 
@@ -135,23 +208,137 @@ bool initializeTime() {
   setenv("TZ", "UTC0", 1);
   tzset();
 
-  // Asumsi waktu kompilasi menggunakan WIB.
-  time_t buildTime = mktime(&tmBuild) - 7 * 3600;
+  time_t buildTime =
+    mktime(&tmBuild) - 7 * 3600;
+
+  if (buildTime <= 0) {
+    return false;
+  }
 
   struct timeval tv = {};
   tv.tv_sec = buildTime;
+  tv.tv_usec = 0;
 
-  return settimeofday(&tv, nullptr) == 0;
+  if (settimeofday(&tv, nullptr) == 0) {
+    timeInitialized = true;
+    timeFromNTP = false;
+
+    Serial.println(
+      "[TIME] Fallback waktu kompilasi berhasil."
+    );
+
+    Serial.println(
+      "[TIME] Peringatan: waktu belum disinkronkan."
+    );
+
+    return true;
+  }
+
+  Serial.println(
+    "[TIME] Fallback waktu kompilasi gagal."
+  );
+
+  return false;
 }
 
 // ======================================
-// 5. BACA MH-Z19C
+// 7. SINKRONISASI NTP
+// ======================================
+
+bool syncTimeNTP() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+
+  Serial.println("[NTP] Sinkronisasi waktu...");
+
+  configTime(
+    0,
+    0,
+    "pool.ntp.org",
+    "time.google.com"
+  );
+
+  unsigned long start = millis();
+
+  while (millis() - start < 10000UL) {
+    monitorPIR();
+
+    time_t now = time(nullptr);
+
+    // Tahun minimal 2025.
+    if (now >= 1735689600) {
+      timeInitialized = true;
+      timeFromNTP = true;
+
+      Serial.println(
+        "[NTP] Waktu tersedia."
+      );
+
+      return true;
+    }
+
+    delay(100);
+  }
+
+  Serial.println("[NTP] Gagal.");
+
+  return false;
+}
+
+// ======================================
+// 8. KONEKSI MQTT TLS
+// ======================================
+
+void connectMQTT() {
+  if (
+    WiFi.status() != WL_CONNECTED ||
+    !timeInitialized ||
+    mqttClient.connected()
+  ) {
+    return;
+  }
+
+  String clientId = "ESP32-GD525-";
+  clientId += WiFi.macAddress();
+  clientId.replace(":", "");
+
+  Serial.println("[MQTT] Menghubungkan TLS...");
+
+  bool connected = mqttClient.connect(
+    clientId.c_str(),
+    MQTT_USER,
+    MQTT_PASSWORD
+  );
+
+  if (connected) {
+    Serial.println("[MQTT] TERHUBUNG!");
+  } else {
+    Serial.print("[MQTT] Gagal, state: ");
+    Serial.println(mqttClient.state());
+
+    char errorBuffer[128] = {};
+
+    int error = secureClient.lastError(
+      errorBuffer,
+      sizeof(errorBuffer)
+    );
+
+    Serial.print("[TLS] Error: ");
+    Serial.println(error);
+    Serial.println(errorBuffer);
+  }
+}
+
+// ======================================
+// 9. BACA SENSOR MH-Z19C
 // ======================================
 
 int readCO2() {
   const uint8_t command[9] = {
-    0xFF, 0x01, 0x86, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x79
+    0xFF, 0x01, 0x86,
+    0x00, 0x00, 0x00,
+    0x00, 0x00, 0x79
   };
 
   while (co2Serial.available()) {
@@ -166,21 +353,29 @@ int readCO2() {
 
   unsigned long start = millis();
 
-  while (count < 9 && millis() - start < 1500) {
+  while (
+    count < 9 &&
+    millis() - start < CO2_TIMEOUT
+  ) {
+    monitorPIR();
+
     if (co2Serial.available()) {
       response[count++] = co2Serial.read();
     }
+
     delay(1);
   }
 
   if (count != 9) {
-    Serial.println("MH-Z19C: timeout");
+    Serial.println("[CO2] Timeout");
     return -1;
   }
 
-  if (response[0] != 0xFF ||
-      response[1] != 0x86) {
-    Serial.println("MH-Z19C: respons tidak valid");
+  if (
+    response[0] != 0xFF ||
+    response[1] != 0x86
+  ) {
+    Serial.println("[CO2] Respons tidak valid");
     return -1;
   }
 
@@ -193,7 +388,7 @@ int readCO2() {
   checksum = 0xFF - checksum + 1;
 
   if (checksum != response[8]) {
-    Serial.println("MH-Z19C: checksum salah");
+    Serial.println("[CO2] Checksum salah");
     return -1;
   }
 
@@ -201,117 +396,25 @@ int readCO2() {
 }
 
 // ======================================
-// 6. PEMANTAUAN PIR (MOTION LATCH)
-// ======================================
-
-void monitorPIR() {
-  unsigned long now = millis();
-
-  if (now - lastPirCheck < PIR_INTERVAL) {
-    return;
-  }
-
-  lastPirCheck = now;
-
-  int pirState = digitalRead(PIR_PIN);
-
-  if (pirState == HIGH) {
-    motionDetected = true;
-  }
-}
-
-// ======================================
-// 7. KONEKSI WIFI
-// ======================================
-
-void connectWiFi() {
-  if (WiFi.status() == WL_CONNECTED) {
-    return;
-  }
-
-  Serial.println("Menghubungkan WiFi...");
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID);
-
-  unsigned long start = millis();
-
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - start < 15000) {
-    monitorPIR();
-    delay(10);
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("WiFi terhubung!");
-    Serial.print("IP ESP32: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("WiFi gagal!");
-  }
-}
-
-// ======================================
-// 8. KONEKSI MQTT TLS
-// ======================================
-
-void connectMQTT() {
-  if (WiFi.status() != WL_CONNECTED ||
-      mqttClient.connected()) {
-    return;
-  }
-
-  String clientId = "ESP32-GD525-";
-  clientId += WiFi.macAddress();
-  clientId.replace(":", "");
-
-  Serial.println("Menghubungkan MQTT TLS...");
-
-  if (mqttClient.connect(
-        clientId.c_str(),
-        MQTT_USER,
-        MQTT_PASSWORD
-      )) {
-    Serial.println("MQTT TERHUBUNG!");
-  } else {
-    Serial.print("MQTT gagal, state: ");
-    Serial.println(mqttClient.state());
-
-    char errorBuffer[128] = {};
-
-    int error = secureClient.lastError(
-      errorBuffer,
-      sizeof(errorBuffer)
-    );
-
-    Serial.print("TLS error: ");
-    Serial.println(error);
-    Serial.println(errorBuffer);
-  }
-}
-
-// ======================================
-// 9. BACA DAN KIRIM SENSOR
+// 10. BACA DAN KIRIM SENSOR
 // ======================================
 
 void publishSensorData() {
-  // Ambil status aktivitas yang tercatat
-  // selama interval sebelumnya.
+  // Ambil status gerakan sejak pengiriman
+  // terakhir yang berhasil.
   int pir = motionDetected ? 1 : 0;
 
   int co2 = readCO2();
 
-  // Periksa PIR lagi setelah pembacaan CO2.
   monitorPIR();
 
   float temperature = dht.readTemperature();
   float humidity = dht.readHumidity();
 
-  // Periksa PIR lagi setelah pembacaan DHT.
   monitorPIR();
 
   Serial.println();
-  Serial.println("===== SENSOR V3 =====");
+  Serial.println("===== GD525 SENSOR V4.1 =====");
 
   Serial.print("CO2        : ");
   Serial.print(co2);
@@ -328,12 +431,16 @@ void publishSensorData() {
   Serial.print("PIR latch  : ");
   Serial.println(pir);
 
-  if (co2 < 0 ||
-      isnan(temperature) ||
-      isnan(humidity)) {
+  if (
+    co2 < 0 ||
+    isnan(temperature) ||
+    isnan(humidity)
+  ) {
     Serial.println(
-      "Pembacaan sensor gagal. Data dilewati."
+      "[SENSOR] Pembacaan gagal."
     );
+
+    publishFailCount++;
     return;
   }
 
@@ -352,13 +459,15 @@ void publishSensorData() {
     pir
   );
 
-  Serial.println("DATA MQTT:");
+  Serial.print("[MQTT] Payload: ");
   Serial.println(payload);
 
   if (!mqttClient.connected()) {
     Serial.println(
-      "MQTT terputus. Data belum terkirim."
+      "[MQTT] Tidak terhubung."
     );
+
+    publishFailCount++;
     return;
   }
 
@@ -370,24 +479,42 @@ void publishSensorData() {
   if (success) {
     publishCount++;
 
-    Serial.println("Publish berhasil!");
+    Serial.print(
+      "[MQTT] Publish berhasil #"
+    );
 
-    // Reset hanya setelah pengiriman berhasil.
-    // Aktivitas yang terdeteksi selama pembacaan
-    // sensor tetap dipertahankan.
-    motionDetected = motionDetected && (pir == 0);
+    Serial.println(publishCount);
+
+    // Reset latch setelah publish berhasil.
+    motionDetected = false;
+
+    // Jika PIR masih HIGH, catat kembali.
+    if (digitalRead(PIR_PIN) == HIGH) {
+      motionDetected = true;
+    }
+
   } else {
-    Serial.println("Publish gagal!");
+    publishFailCount++;
+
+    Serial.println(
+      "[MQTT] Publish gagal."
+    );
   }
 }
 
 // ======================================
-// 10. SETUP
+// 11. SETUP
 // ======================================
 
 void setup() {
   Serial.begin(115200);
   delay(1500);
+
+  Serial.println();
+  Serial.println("==================================");
+  Serial.println(" GD525 SENSOR V4.1");
+  Serial.println(" CONTINUOUS MONITORING");
+  Serial.println("==================================");
 
   pinMode(PIR_PIN, INPUT);
 
@@ -400,38 +527,11 @@ void setup() {
     MH_TX_PIN
   );
 
-  Serial.println();
-  Serial.println(
-    "=== GD525 SENSOR V3 - MOTION LATCH ==="
-  );
+  Serial.println("PIR sampling : 50 ms");
+  Serial.println("MQTT publish : 10 detik");
+  Serial.println("Durasi       : Continuous");
 
-  Serial.println(
-    "PIR sampling: 50 ms"
-  );
-
-  Serial.println(
-    "MQTT publish: 10 detik"
-  );
-
-  Serial.println(
-    "Durasi: 15 menit"
-  );
-
-  testStart = millis();
   lastPirCheck = millis();
-
-  // Mulai mencatat status PIR.
-  monitorPIR();
-
-  connectWiFi();
-
-  if (!initializeTime()) {
-    Serial.println(
-      "Gagal inisialisasi waktu TLS."
-    );
-    testFinished = true;
-    return;
-  }
 
   secureClient.setCACert(SERVER_CERT);
   secureClient.setHandshakeTimeout(15);
@@ -444,42 +544,49 @@ void setup() {
   mqttClient.setKeepAlive(30);
   mqttClient.setSocketTimeout(10);
 
-  connectMQTT();
+  // Wi-Fi
+  connectWiFi();
+
+  // Coba NTP, lalu fallback jika gagal.
+  if (WiFi.status() == WL_CONNECTED) {
+    lastNtpAttempt = millis();
+
+    if (!syncTimeNTP()) {
+      Serial.println(
+        "[TIME] Menggunakan fallback..."
+      );
+
+      initializeTimeFromBuild();
+    }
+
+    if (timeInitialized) {
+      connectMQTT();
+    }
+  }
 
   lastPublish = millis();
+
+  Serial.println(
+    "[SYSTEM] Monitoring dimulai."
+  );
 }
 
 // ======================================
-// 11. LOOP
+// 12. LOOP CONTINUOUS MONITORING
 // ======================================
 
 void loop() {
-  if (testFinished) {
-    delay(1000);
-    return;
-  }
-
-  // Pantau PIR sesering mungkin.
   monitorPIR();
 
-  if (millis() - testStart >= TEST_DURATION) {
-    testFinished = true;
+  unsigned long now = millis();
 
-    Serial.println();
-    Serial.println(
-      "=== UJI COBA 15 MENIT SELESAI ==="
-    );
-
-    Serial.print("Total publish berhasil: ");
-    Serial.println(publishCount);
-
-    mqttClient.disconnect();
-    return;
-  }
-
+  // A. Reconnect Wi-Fi
   if (WiFi.status() != WL_CONNECTED) {
-    if (millis() - lastReconnect >= 5000) {
-      lastReconnect = millis();
+    if (
+      now - lastWiFiReconnect >=
+      RECONNECT_INTERVAL
+    ) {
+      lastWiFiReconnect = now;
       connectWiFi();
     }
 
@@ -487,16 +594,42 @@ void loop() {
     return;
   }
 
+  // B. Jika belum memiliki waktu valid,
+  // coba NTP atau fallback.
+  if (!timeInitialized) {
+    if (
+      now - lastNtpAttempt >=
+      NTP_RETRY_INTERVAL
+    ) {
+      lastNtpAttempt = now;
+
+      if (!syncTimeNTP()) {
+        initializeTimeFromBuild();
+      }
+    }
+
+    delay(10);
+    return;
+  }
+
+  // C. Reconnect MQTT
   if (!mqttClient.connected()) {
-    if (millis() - lastReconnect >= 5000) {
-      lastReconnect = millis();
+    if (
+      now - lastMQTTReconnect >=
+      RECONNECT_INTERVAL
+    ) {
+      lastMQTTReconnect = now;
       connectMQTT();
     }
   } else {
     mqttClient.loop();
   }
 
-  if (millis() - lastPublish >= PUBLISH_INTERVAL) {
+  // D. Kirim sensor setiap 10 detik
+  if (
+    millis() - lastPublish >=
+    PUBLISH_INTERVAL
+  ) {
     lastPublish = millis();
     publishSensorData();
   }
