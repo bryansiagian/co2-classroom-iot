@@ -103,7 +103,17 @@ Contoh pesan sensor saat ini:
 - Backup SQLite terjadwal menggunakan `co2class-backup.timer`, tetapi saat ini disimpan pada host yang sama.
 - Jangan menjalankan dua instance backend dengan MQTT client ID sama.
 
-## 8. Risiko dan batas yang perlu ditangani
+## 8. Perilaku saat terjadi gangguan (rancangan vs kondisi aktif)
+
+| Kondisi | Respons saat ini | Target pengembangan |
+|---|---|---|
+| Wi-Fi/MQTT terputus | ESP32 mencoba reconnect; data sementara dapat hilang | Buffer terbatas + seq + aturan retry yang dapat diuji |
+| Rekomendasi tidak sampai | Belum ada verifikasi fallback LED | LED lokal memakai CO₂ aktual dan ambang 800/1000 ppm bila rekomendasi stale |
+| Sensor diam lebih dari 3 menit | API health sudah memiliki indikator `stale` via konfigurasi (default 180 detik) | Dashboard menampilkan offline, bukan angka usang |
+| GRU belum tersedia | Backend menggunakan persistence | Model GRU yang tervalidasi, dengan fallback eksplisit |
+| Sensor gagal sebagian | Firmware ringkas dapat melewatkan publish | Format `faults` dengan field nullable dan logging kegagalan |
+
+## 9. Risiko dan batas yang perlu ditangani
 
 | Risiko | Penanganan berikutnya |
 |---|---|
@@ -114,9 +124,12 @@ Contoh pesan sensor saat ini:
 | Dataset bercampur antara demo dan nyata | Pisahkan mode data dan catat provenance |
 | Model belum GRU | Benchmark baseline kemudian pelatihan dan evaluasi GRU |
 
-## 9. Referensi internal
+## 10. Referensi internal
 
 - [README utama](../README.md)
 - [Deployment H200](deployment-h200.md)
 - [Pengumpulan data](data-collection.md)
 - [Roadmap](development-roadmap.md)
+
+- [Kontrak data](data-contract.md)
+- [Keputusan dan risiko](decisions-and-risks.md)
