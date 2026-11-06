@@ -1,0 +1,8 @@
+# Copy to mosquitto-dev.conf and replace password_file with your real Windows path.
+# Avoid using this broker on public/untrusted Wi-Fi networks.
+listener 1883 0.0.0.0
+allow_anonymous false
+password_file C:/path/to/co2-classroom-iot/deployment/dev-gateway/local-passwords
+persistence false
+log_type error
+log_type warning
