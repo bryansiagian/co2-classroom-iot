@@ -76,24 +76,74 @@ Mode modeForSSID(const String& ssid) {
 }
 
 void configureBroker(Mode next) {
+  // Putuskan koneksi MQTT sebelumnya
   mqttClient.disconnect();
   plainClient.stop();
   tlsClient.stop();
+
   mode = next;
+
+  Serial.println();
+  Serial.println("==================================");
+  Serial.println("[DEBUG] KONFIGURASI KONEKSI");
+  Serial.println("==================================");
+
+  // Informasi Wi-Fi
+  Serial.print("[DEBUG] SSID WiFi    : ");
+  Serial.println(WiFi.SSID());
+
+  Serial.print("[DEBUG] IP ESP32     : ");
+  Serial.println(WiFi.localIP());
+
+  Serial.print("[DEBUG] Gateway     : ");
+  Serial.println(WiFi.gatewayIP());
+
+  Serial.print("[DEBUG] Subnet Mask : ");
+  Serial.println(WiFi.subnetMask());
+
+  Serial.print("[DEBUG] WiFi Status : ");
+  Serial.println(WiFi.status());
+
+  // Pilih broker berdasarkan mode
   if (mode == DEV) {
+
     mqttClient.setClient(plainClient);
     mqttClient.setServer(DEV_MQTT_HOST, 1883);
-    Serial.print("[MODE] DEV -> Windows broker: "); Serial.println(DEV_MQTT_HOST);
+
+    Serial.println("[MODE] DEVELOPMENT");
+    Serial.print("[DEBUG] MQTT Host   : ");
+    Serial.println(DEV_MQTT_HOST);
+
+    Serial.println("[DEBUG] MQTT Port   : 1883");
+    Serial.println("[DEBUG] MQTT TLS    : OFF");
+
   } else if (mode == CAMPUS) {
+
     tlsClient.setCACert(SERVER_CERT);
     tlsClient.setHandshakeTimeout(15);
+
     mqttClient.setClient(tlsClient);
     mqttClient.setServer(CAMPUS_BROKER, 8883);
-    Serial.println("[MODE] CAMPUS -> H200 MQTT TLS");
+
+    Serial.println("[MODE] CAMPUS");
+    Serial.print("[DEBUG] MQTT Host   : ");
+    Serial.println(CAMPUS_BROKER);
+
+    Serial.println("[DEBUG] MQTT Port   : 8883");
+    Serial.println("[DEBUG] MQTT TLS    : ON");
+
+  } else {
+    Serial.println("[MODE] NONE");
+    Serial.println("[ERROR] Mode koneksi tidak valid");
   }
+
   mqttClient.setKeepAlive(30);
   mqttClient.setSocketTimeout(10);
+
   lastMqttRetry = 0;
+
+  Serial.println("==================================");
+  Serial.println();
 }
 
 bool tryWiFi(const char* ssid, const char* password) {
