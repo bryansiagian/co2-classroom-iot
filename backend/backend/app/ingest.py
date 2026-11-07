@@ -60,13 +60,14 @@ class Pipeline:
             # Kontrak data lama tetap didukung untuk simulator/tests.
             if {"co2", "temperature", "humidity", "pir"}.issubset(msg):
                 msg = {
-                    "device_id": "esp32_gd525",
+                    **msg,
+                    "device_id": msg.get("device_id") or "esp32_gd525",
                     "co2_ppm": msg["co2"],
                     "temp_in_c": msg["temperature"],
                     "hum_in_pct": msg["humidity"],
                     "pir": msg["pir"],
-                    "ts": None,
-                    "faults": [],
+                    "ts": msg.get("ts"),
+                    "faults": msg.get("faults", []),
                 }
             if not msg.get("device_id"):
                 raise ValueError("device_id wajib ada")
