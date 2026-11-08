@@ -69,12 +69,30 @@ def migrate(db_path: Path) -> None:
                 else:
                     print(f"[SKIP] {column} sudah ada")
 
+            
+            # Hapus indeks legacy lama yang berlaku untuk seluruh data.
+            # Data sensor tidak dihapus.
+            conn.execute("DROP INDEX IF EXISTS idx_reading_dedup")
+
+            # Deduplikasi khusus payload V4.2 / legacy.
+            conn.execute("""
+                CREATE UNIQUE INDEX idx_reading_dedup
+                ON sensor_reading (device_id, ts_utc, seq)
+                WHERE boot_id IS NULL
+            """)
+
+            print("[INDEX] Legacy deduplication updated")
+
+            # Deduplikasi payload V4.3 berdasarkan sesi boot.
             conn.execute(f"""
                 CREATE UNIQUE INDEX IF NOT EXISTS {INDEX_NAME}
                 ON sensor_reading (device_id, boot_id, seq)
                 WHERE boot_id IS NOT NULL
-                  AND seq IS NOT NULL
+                AND seq IS NOT NULL
             """)
+
+            print("[INDEX] V4.3 deduplication ready")
+
 
             after = conn.execute(
                 "SELECT COUNT(*) FROM sensor_reading"
