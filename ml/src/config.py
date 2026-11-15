@@ -27,7 +27,7 @@ FEATURE_CANDIDATES = [c for c in CONTRACT_COLS if c != "timestamp"]
 
 # Rentang nilai valid (di luar rentang -> dianggap rusak -> NaN)
 VALID_RANGE = {
-    "co2_ppm": (250.0, 10000.0),
+    "co2_ppm": (350.0, 5000.0),
     "temp_in_c": (-10.0, 60.0),
     "hum_in_pct": (0.0, 100.0),
     "temp_out_c": (-10.0, 60.0),
@@ -38,7 +38,7 @@ VALID_RANGE = {
 # --- Parameter pemodelan ----------------------------------------------------
 STEP_MIN = 1            # resolusi data bersih (menit)
 HORIZON = 15            # prediksi 1..15 menit ke depan
-MAX_GAP_MIN = 3         # celah <= ini boleh diisi (interpolasi linear)
+MAX_GAP_MIN = 3         # legacy parameter; missing values are not imputed
 WINDOW_CANDIDATES = [15, 30, 60]
 SPLIT = (0.70, 0.15, 0.15)
 THRESHOLDS_PPM = [800, 1000, 1500]

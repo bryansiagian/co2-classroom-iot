@@ -32,7 +32,11 @@ def parse_timestamp(value: str) -> datetime:
 def valid_row(row: sqlite3.Row) -> bool:
     try:
         flags = json.loads(row["quality_flags"] or "[]")
+        faults = json.loads(row["faults"] or "[]")
         if not isinstance(flags, list) or any(str(f).lower() == "suspect" or str(f).lower().endswith("_suspect") for f in flags):
+            return False
+        # Backend stores sensor/device fault codes as a JSON array.
+        if not isinstance(faults, list) or faults:
             return False
         if row["pir"] not in (0, 1):
             return False
@@ -53,7 +57,7 @@ def resample(db_path: Path, room: str, expected: int, min_samples: int):
     connection.row_factory = sqlite3.Row
     try:
         rows = connection.execute("""
-            SELECT received_at, co2_ppm, temp_in_c, hum_in_pct, pir, quality_flags
+            SELECT received_at, co2_ppm, temp_in_c, hum_in_pct, pir, quality_flags, faults
             FROM sensor_reading WHERE room_id=? ORDER BY received_at, id
         """, (room,)).fetchall()
     finally:
@@ -120,6 +124,7 @@ def resample(db_path: Path, room: str, expected: int, min_samples: int):
         "first_minute_utc": output[0]["minute_utc"], "last_minute_utc": output[-1]["minute_utc"],
         "warnings": ["Data development; jangan diklaim sebagai pengukuran resmi GD525.",
                      "Tidak ada interpolasi; putuskan segmen kontinu sebelum membuat window GRU.",
+                     "Baris dengan faults non-empty atau quality_flags suspect ditolak.",
                      "received_at bukan waktu pengukuran ESP32; ts_corrected diperbolehkan."],
     }
     return output, usable, report

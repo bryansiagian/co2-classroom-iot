@@ -13,13 +13,14 @@ class TestResample(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "test.db"
             con = sqlite3.connect(db)
-            con.execute("CREATE TABLE sensor_reading (id INTEGER PRIMARY KEY, room_id TEXT, received_at TEXT, co2_ppm INTEGER, temp_in_c REAL, hum_in_pct REAL, pir INTEGER, quality_flags TEXT)")
-            def add(minute, seconds, co2=1000, flags='[]', pir=0):
-                con.execute("INSERT INTO sensor_reading(room_id, received_at, co2_ppm, temp_in_c, hum_in_pct, pir, quality_flags) VALUES (?,?,?,?,?,?,?)",
-                            ("gd525", f"2026-11-04T14:{minute:02}:{seconds:02}Z", co2, 26., 74., pir, flags))
+            con.execute("CREATE TABLE sensor_reading (id INTEGER PRIMARY KEY, room_id TEXT, received_at TEXT, co2_ppm INTEGER, temp_in_c REAL, hum_in_pct REAL, pir INTEGER, quality_flags TEXT, faults TEXT DEFAULT '[]')")
+            def add(minute, seconds, co2=1000, flags='[]', pir=0, faults='[]'):
+                con.execute("INSERT INTO sensor_reading(room_id, received_at, co2_ppm, temp_in_c, hum_in_pct, pir, quality_flags, faults) VALUES (?,?,?,?,?,?,?,?)",
+                            ("gd525", f"2026-11-04T14:{minute:02}:{seconds:02}Z", co2, 26., 74., pir, flags, faults))
             add(0, 40)
             for seconds in (0, 10, 20, 30, 40, 50):
-                add(1, seconds, 1200, pir=1 if seconds == 30 else 0)
+                add(1, seconds, 1200, pir=1 if seconds == 30 else 0,
+                    faults='["sensor_fault"]' if seconds == 0 else '[]')
             for seconds in (0, 10, 20, 30):
                 add(2, seconds, 3000 if seconds == 10 else 1000, flags='["suspect"]' if seconds == 10 else '[]')
             add(4, 3)
@@ -30,7 +31,7 @@ class TestResample(unittest.TestCase):
             self.assertEqual(len(usable), 1)
             self.assertEqual(usable[0]['co2_ppm'], 1200)
             self.assertEqual(usable[0]['pir'], 1)
-            self.assertEqual(report['samples_rejected'], 1)
+            self.assertEqual(report['samples_rejected'], 2)
             self.assertEqual(report['minutes_missing'], 1)
             self.assertEqual(report['raw_rows'], 12)
 
@@ -38,7 +39,7 @@ class TestResample(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / 'empty.db'
             con = sqlite3.connect(db)
-            con.execute('CREATE TABLE sensor_reading(id INTEGER, room_id TEXT, received_at TEXT, co2_ppm INTEGER, temp_in_c REAL, hum_in_pct REAL, pir INTEGER, quality_flags TEXT)')
+            con.execute("CREATE TABLE sensor_reading(id INTEGER, room_id TEXT, received_at TEXT, co2_ppm INTEGER, temp_in_c REAL, hum_in_pct REAL, pir INTEGER, quality_flags TEXT, faults TEXT DEFAULT '[]')")
             con.close()
             a, b, r = resample(db, 'gd525', 6, 5)
             self.assertEqual((a, b, r['minutes_total']), ([], [], 0))
