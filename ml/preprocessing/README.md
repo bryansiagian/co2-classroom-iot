@@ -100,3 +100,7 @@ python ml/training/train_gru.py `
 ```
 
 `--prepare-only` menulis `training_report.json` dan `scaler.json` tanpa PyTorch dan tanpa melatih model. `--reference-input` menetapkan batas waktu berdasarkan menit usable multivariate dan membatasi window test kepada timestamp target yang tersedia pada profil referensi. Saat nanti training, kode GRU memakai `input_size=1` untuk `co2_only` dan `input_size=4` untuk `multivariate`. Setiap profil tetap fitting scaler hanya pada train. Tidak ada pengisian gap. Perbandingan final harus memverifikasi timestamp dan nilai target kedua hasil prediksi, bukan hanya jumlah window.
+
+
+### Acuan label CO2 pada evaluasi
+Meskipun target timestamp sama, nilai agregasi CO2 bisa sedikit berbeda antarprofil ketika DHT22 gagal. Pada tahap test, jalur `--reference-input` sekarang juga menyelaraskan **nilai target aktual CO2** ke dataset multivariat yang sama untuk kedua eksperimen. Selisih sebelum penyelarasan dicatat sebagai `test_target_alignment.changed_target_values` dan `maximum_absolute_target_difference_ppm`. Input sequence tetap berasal dari profil masing-masing. Saat model benar-benar dilatih, `test_predictions.csv` berisi timestamp target, nilai aktual kanonis, prediksi GRU, dan prediksi Persistence untuk audit per timestamp. Semua hasil lokal berada di direktori preprocessing yang diabaikan Git.
