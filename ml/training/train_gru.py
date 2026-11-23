@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 FEATURES = ("co2_ppm", "temp_in_c", "hum_in_pct", "pir")
+PROFILE_FEATURES = {"multivariate": FEATURES, "co2_only": ("co2_ppm",)}
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT = ROOT / "ml/data/processed/development/all_minutes.csv"
 DEFAULT_OUTPUT = ROOT / "ml/data/processed/development/gru_training"
@@ -30,7 +31,10 @@ def parse_utc(value: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def load_minutes(path: Path) -> list[dict]:
+def load_minutes(path: Path, profile: str = "multivariate") -> list[dict]:
+    if profile not in PROFILE_FEATURES:
+        raise ValueError(f"Unknown profile: {profile}")
+    fields = PROFILE_FEATURES[profile]
     result = []
     with path.open(newline="", encoding="utf-8") as fp:
         for raw in csv.DictReader(fp):
@@ -39,7 +43,7 @@ def load_minutes(path: Path) -> list[dict]:
             vals = None
             if usable:
                 try:
-                    vals = tuple(float(raw[f]) for f in FEATURES)
+                    vals = tuple(float(raw[f]) for f in fields)
                     if not all(math.isfinite(x) for x in vals):
                         usable = False
                 except (ValueError, TypeError):
@@ -50,6 +54,19 @@ def load_minutes(path: Path) -> list[dict]:
     if any(a["ts"] >= b["ts"] for a, b in zip(result, result[1:])):
         raise ValueError("Timestamps must be strictly increasing and unique")
     return result
+
+
+def split_by_fixed_boundaries(rows: list[dict], train_end: datetime,
+                              val_end: datetime):
+    """Apply the same absolute UTC split boundaries to different data profiles."""
+    if train_end >= val_end:
+        raise ValueError("Train boundary must precede validation boundary")
+    parts = {"train": [], "val": [], "test": []}
+    for row in rows:
+        split = ("train" if row["ts"] <= train_end
+                 else "val" if row["ts"] <= val_end else "test")
+        parts[split].append(row)
+    return parts
 
 
 def split_by_usable_time(rows: list[dict], train_ratio=0.70, val_ratio=0.15):
@@ -66,10 +83,7 @@ def split_by_usable_time(rows: list[dict], train_ratio=0.70, val_ratio=0.15):
         raise ValueError("Too few usable minutes for three chronological splits")
     train_end = usable[train_n - 1]
     val_end = usable[train_n + val_n - 1]
-    parts = {"train": [], "val": [], "test": []}
-    for row in rows:
-        part = "train" if row["ts"] <= train_end else "val" if row["ts"] <= val_end else "test"
-        parts[part].append(row)
+    parts = split_by_fixed_boundaries(rows, train_end, val_end)
     return parts, {"train_end_utc": train_end.isoformat(), "val_end_utc": val_end.isoformat()}
 
 
@@ -77,22 +91,27 @@ def split_by_usable_time(rows: list[dict], train_ratio=0.70, val_ratio=0.15):
 class StandardScaler:
     means: list[float]
     stds: list[float]
+    feature_names: tuple[str, ...] = FEATURES
 
     @classmethod
-    def fit(cls, rows: list[dict]):
+    def fit(cls, rows: list[dict], feature_names: tuple[str, ...] = FEATURES):
         values = [r["values"] for r in rows if r["usable"]]
         if not values:
             raise ValueError("No train data to fit scaler")
         cols = list(zip(*values))
         means = [sum(col) / len(col) for col in cols]
         stds = [max(math.sqrt(sum((v-m)**2 for v in col) / len(col)), 1e-8) for col, m in zip(cols, means)]
-        return cls(means, stds)
+        if len(means) != len(feature_names):
+            raise ValueError("Scaler feature count does not match input profile")
+        return cls(means, stds, feature_names)
 
     def transform(self, values):
+        if len(values) != len(self.means):
+            raise ValueError("Input feature count does not match fitted scaler")
         return [(float(v) - m) / s for v, m, s in zip(values, self.means, self.stds)]
 
     def as_dict(self):
-        return {"features": list(FEATURES), "mean": self.means, "std": self.stds, "fitted_on": "train_minutes_only"}
+        return {"features": list(self.feature_names), "mean": self.means, "std": self.stds, "fitted_on": "train_minutes_only"}
 
 
 def make_windows(rows: list[dict], lookback=60, horizon=15):
@@ -132,10 +151,30 @@ def evaluate(y_true, y_pred):
 
 
 def train(args):
-    rows = load_minutes(Path(args.input))
-    parts, boundaries = split_by_usable_time(rows)
-    windows = {split: make_windows(part, args.lookback, args.horizon) for split, part in parts.items()}
-    scaler = StandardScaler.fit(parts["train"])
+    profile = getattr(args, "profile", "multivariate")
+    feature_names = PROFILE_FEATURES[profile]
+    rows = load_minutes(Path(args.input), profile=profile)
+    reference_input = getattr(args, "reference_input", None)
+    if reference_input:
+        reference_rows = load_minutes(Path(reference_input), profile="multivariate")
+    else:
+        reference_rows = rows
+    _, boundaries = split_by_usable_time(reference_rows)
+    train_end = parse_utc(boundaries["train_end_utc"])
+    val_end = parse_utc(boundaries["val_end_utc"])
+    parts = split_by_fixed_boundaries(rows, train_end, val_end)
+    windows = {split: make_windows(part, args.lookback, args.horizon)
+               for split, part in parts.items()}
+
+    # Only test on timestamps supported by both profiles. Using the same
+    # multivariate reference for both training runs guarantees matched targets.
+    all_test_windows = len(windows["test"])
+    if reference_input:
+        ref_parts = split_by_fixed_boundaries(reference_rows, train_end, val_end)
+        reference_test = make_windows(ref_parts["test"], args.lookback, args.horizon)
+        allowed_targets = {w[3] for w in reference_test}
+        windows["test"] = [w for w in windows["test"] if w[3] in allowed_targets]
+    scaler = StandardScaler.fit(parts["train"], feature_names=feature_names)
     counts = {k: len(windows[k]) for k in windows}
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
@@ -144,7 +183,11 @@ def train(args):
         "dataset_type": "development; NOT official GD525 research data" if "development" in str(args.input) else "verify_data_provenance",
         "lookback_minutes": args.lookback,
         "horizon_minutes": args.horizon,
-        "feature_order": list(FEATURES),
+        "profile": profile,
+        "feature_order": list(feature_names),
+        "reference_input": str(Path(reference_input).resolve()) if reference_input else None,
+        "test_windows_before_alignment": all_test_windows,
+        "test_windows_after_alignment": counts["test"],
         "split_method": "chronological usable minute boundaries before windowing; no window crosses splits",
         "boundaries": boundaries,
         "usable_minutes_by_split": {k: sum(r["usable"] for r in v) for k,v in parts.items()},
@@ -190,7 +233,7 @@ def train(args):
     class GRURegressor(nn.Module):
         def __init__(self):
             super().__init__()
-            self.gru = nn.GRU(input_size=4, hidden_size=args.hidden, num_layers=1, batch_first=True)
+            self.gru = nn.GRU(input_size=len(feature_names), hidden_size=args.hidden, num_layers=1, batch_first=True)
             self.head = nn.Linear(args.hidden, 1)
 
         def forward(self, x):
@@ -235,9 +278,9 @@ def train(args):
             prediction = model(X).cpu().tolist()
             raw_pred = [v*scaler.stds[0] + scaler.means[0] for v in prediction]
             pred_metrics[name] = evaluate([w[1] for w in windows[name]], raw_pred)
-    torch.save({"state_dict": best_state, "model": "GRURegressor", "input_size": 4,
+    torch.save({"state_dict": best_state, "model": "GRURegressor", "input_size": len(feature_names),
                 "hidden_size": args.hidden, "lookback": args.lookback, "horizon": args.horizon,
-                "features": FEATURES, "scaler": scaler.as_dict()}, output / "gru_checkpoint.pt")
+                "features": feature_names, "scaler": scaler.as_dict()}, output / "gru_checkpoint.pt")
     report["status"] = "trained_development_experiment"
     report["GRU"] = {"epochs_trained": epochs_used, "best_validation_mse_normalized": best_loss, "metrics": pred_metrics,
                      "architecture": {"layers": 1, "hidden_units": args.hidden}, "device": str(device)}
@@ -250,6 +293,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", default=str(DEFAULT_INPUT))
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    parser.add_argument("--profile", choices=tuple(PROFILE_FEATURES), default="multivariate")
+    parser.add_argument("--reference-input", default=None,
+                        help="Multivariate all_minutes.csv used for shared split boundaries and matched test targets")
     parser.add_argument("--lookback", type=int, default=60)
     parser.add_argument("--horizon", type=int, default=15)
     parser.add_argument("--min-windows", type=int, default=20)
