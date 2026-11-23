@@ -57,3 +57,20 @@ Dengan `--profile both` dua set output ditulis di bawah `ml/data/processed/devel
 - Tanpa `--profile` perilaku lama tetap berlaku dan output langsung berada di direktori `<device-id>`. Mode `both` tidak menimpa file output lama pada direktori tersebut.
 
 `n_valid` dan `coverage_pct` dihitung menurut kriteria profil yang dipilih, sehingga satu menit dapat usable pada CO2-only tetapi incomplete pada multivariate. Tidak ada interpolasi. Besarnya penambahan menit/window harus dihitung ulang dari hasil ekspor, tidak disimpulkan dari jumlah record fault. Kedua profil tetap memerlukan pemisahan kronologis sebelum evaluasi GRU; perbandingan model harus menggunakan timestamp test yang sama.
+
+
+## Membentuk kandidat window per profil (belum split)
+```powershell
+python ml/preprocessing/build_windows.py `
+    --input ml/data/processed/development/esp32_gd525/co2_only/all_minutes.csv `
+    --out-dir ml/data/processed/development/esp32_gd525/co2_only/windows `
+    --profile co2_only --lookback 60 --horizon 15
+
+python ml/preprocessing/build_windows.py `
+    --input ml/data/processed/development/esp32_gd525/multivariate/all_minutes.csv `
+    --out-dir ml/data/processed/development/esp32_gd525/multivariate/windows `
+    --profile multivariate --lookback 60 --horizon 15
+```
+
+Kedua perintah ini **hanya untuk audit kandidat window**: hasil `windows.jsonl` belum dibagi train/validation/test. Jangan menggunakan window tumpang tindih hasil ekspor ini untuk random split. Untuk eksperimen model, lakukan split waktu yang mencegah window input dan target melintasi batas split. Perbandingan univariat vs multivariat menggunakan target timestamp test yang sama. Jalankan unit test setelah pull:
+`python -m unittest discover -s ml/preprocessing/tests -p "test_*.py" -v`.
