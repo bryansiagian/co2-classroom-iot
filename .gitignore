@@ -33,3 +33,6 @@ backups/*.db-*
 
 # Development preprocessing outputs
 /ml/data/processed/development/
+
+# Raw MQTT sensor captures
+mqtt_v43_capture.jsonl
