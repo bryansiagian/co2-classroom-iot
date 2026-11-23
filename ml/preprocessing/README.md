@@ -74,3 +74,29 @@ python ml/preprocessing/build_windows.py `
 
 Kedua perintah ini **hanya untuk audit kandidat window**: hasil `windows.jsonl` belum dibagi train/validation/test. Jangan menggunakan window tumpang tindih hasil ekspor ini untuk random split. Untuk eksperimen model, lakukan split waktu yang mencegah window input dan target melintasi batas split. Perbandingan univariat vs multivariat menggunakan target timestamp test yang sama. Jalankan unit test setelah pull:
 `python -m unittest discover -s ml/preprocessing/tests -p "test_*.py" -v`.
+
+
+## ML-01: split bersama dan persiapan GRU tanpa training
+
+Jalankan dari root repository. Dataset multivariate digunakan sebagai acuan batas split bersama dan himpunan target pengujian yang identik untuk kedua model.
+
+```powershell
+$base = "ml/data/processed/development/esp32_gd525"
+$reference = "$base/multivariate/all_minutes.csv"
+
+python ml/training/train_gru.py `
+    --input $reference `
+    --profile multivariate `
+    --reference-input $reference `
+    --output "$base/multivariate/gru_training" `
+    --prepare-only
+
+python ml/training/train_gru.py `
+    --input "$base/co2_only/all_minutes.csv" `
+    --profile co2_only `
+    --reference-input $reference `
+    --output "$base/co2_only/gru_training" `
+    --prepare-only
+```
+
+`--prepare-only` menulis `training_report.json` dan `scaler.json` tanpa PyTorch dan tanpa melatih model. `--reference-input` menetapkan batas waktu berdasarkan menit usable multivariate dan membatasi window test kepada timestamp target yang tersedia pada profil referensi. Saat nanti training, kode GRU memakai `input_size=1` untuk `co2_only` dan `input_size=4` untuk `multivariate`. Setiap profil tetap fitting scaler hanya pada train. Tidak ada pengisian gap. Perbandingan final harus memverifikasi timestamp dan nilai target kedua hasil prediksi, bukan hanya jumlah window.
