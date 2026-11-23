@@ -66,6 +66,34 @@ class TestBuildWindows(unittest.TestCase):
             self.assertTrue((base/'out/windows_index.csv').exists())
             self.assertEqual((base/'out/windows.jsonl').read_text(), '')
 
+    def test_co2_only_windows_allow_empty_dht_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            path = base / 'co2_minutes.csv'
+            self.make_csv(path, n=8)
+            with path.open(newline='', encoding='utf-8') as handle:
+                rows = list(csv.DictReader(handle))
+            for row in rows:
+                row['temp_in_c'] = ''
+                row['hum_in_pct'] = ''
+                row['pir'] = ''
+            with path.open('w', newline='', encoding='utf-8') as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+
+            with self.assertRaisesRegex(ValueError, 'fitur usable invalid'):
+                load_minutes(path)
+            minutes = load_minutes(path, profile='co2_only')
+            windows = generate_windows(minutes, lookback=3, horizon=2)
+            self.assertEqual(len(windows), 4)
+            self.assertEqual(windows[0]['features'], ['co2_ppm'])
+            self.assertEqual(windows[0]['X'][0], [1000.0])
+            self.assertEqual(windows[0]['target_utc'], '2026-11-04T14:04:00Z')
+            report = export(path, base / 'windows', 3, 2, 1, profile='co2_only')
+            self.assertEqual(report['feature_order'], ['co2_ppm'])
+            self.assertEqual(report['windows_created'], 4)
+
     def test_reject_duplicate_or_unsorted_timestamp(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'all_minutes.csv'
