@@ -137,6 +137,34 @@ def make_windows(rows: list[dict], lookback=60, horizon=15):
     return windows
 
 
+def align_test_targets(test_windows: list[tuple], reference_windows: list[tuple]):
+    """Align timestamps and canonical test labels to the reference profile.
+
+    Inputs and persistence inputs stay profile-specific. Only y at the
+    evaluation timestamp uses the same source for both profiles.
+    """
+    reference = {w[3]: w[1] for w in reference_windows}
+    aligned = []
+    changed = 0
+    max_difference = 0.0
+    for w in test_windows:
+        if w[3] not in reference:
+            continue
+        target = reference[w[3]]
+        difference = abs(w[1] - target)
+        if difference > 1e-9:
+            changed += 1
+            max_difference = max(max_difference, difference)
+        aligned.append((w[0], target, w[2], w[3], w[4]))
+    if [w[3] for w in aligned] != [w[3] for w in reference_windows]:
+        raise ValueError("Aligned test timestamps differ from the reference test set")
+    return aligned, {
+        "reference_targets": len(reference_windows),
+        "changed_target_values": changed,
+        "maximum_absolute_target_difference_ppm": round(max_difference, 6),
+    }
+
+
 def evaluate(y_true, y_pred):
     if not y_true:
         return None
@@ -169,11 +197,13 @@ def train(args):
     # Only test on timestamps supported by both profiles. Using the same
     # multivariate reference for both training runs guarantees matched targets.
     all_test_windows = len(windows["test"])
+    label_alignment = None
     if reference_input:
         ref_parts = split_by_fixed_boundaries(reference_rows, train_end, val_end)
         reference_test = make_windows(ref_parts["test"], args.lookback, args.horizon)
-        allowed_targets = {w[3] for w in reference_test}
-        windows["test"] = [w for w in windows["test"] if w[3] in allowed_targets]
+        windows["test"], label_alignment = align_test_targets(
+            windows["test"], reference_test
+        )
     scaler = StandardScaler.fit(parts["train"], feature_names=feature_names)
     counts = {k: len(windows[k]) for k in windows}
     output = Path(args.output)
@@ -188,6 +218,7 @@ def train(args):
         "reference_input": str(Path(reference_input).resolve()) if reference_input else None,
         "test_windows_before_alignment": all_test_windows,
         "test_windows_after_alignment": counts["test"],
+        "test_target_alignment": label_alignment,
         "split_method": "chronological usable minute boundaries before windowing; no window crosses splits",
         "boundaries": boundaries,
         "usable_minutes_by_split": {k: sum(r["usable"] for r in v) for k,v in parts.items()},
@@ -285,6 +316,16 @@ def train(args):
             prediction = model(X).cpu().tolist()
             raw_pred = [v*scaler.stds[0] + scaler.means[0] for v in prediction]
             pred_metrics[name] = evaluate([w[1] for w in windows[name]], raw_pred)
+    with (output / "test_predictions.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["target_utc", "actual_co2_ppm", "predicted_co2_ppm",
+                         "persistence_co2_ppm"])
+        # predict test once more for a transparent, timestamp-keyed comparison.
+        with torch.no_grad():
+            test_predictions = model(data["test"][0]).cpu().tolist()
+        for w, estimate in zip(windows["test"], test_predictions):
+            writer.writerow([w[3].isoformat().replace("+00:00", "Z"), w[1],
+                             estimate * scaler.stds[0] + scaler.means[0], w[4]])
     torch.save({"state_dict": best_state, "model": "GRURegressor", "input_size": len(feature_names),
                 "hidden_size": args.hidden, "lookback": args.lookback, "horizon": args.horizon,
                 "features": feature_names, "scaler": scaler.as_dict()}, output / "gru_checkpoint.pt")
