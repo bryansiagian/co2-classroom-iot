@@ -199,6 +199,13 @@ def train(args):
         report["baseline_persistence"][k] = evaluate([w[1] for w in examples], [w[4] for w in examples])
     (output / "scaler.json").write_text(json.dumps(scaler.as_dict(), indent=2), encoding="utf-8")
 
+    if getattr(args, "prepare_only", False):
+        report["status"] = "prepared_only"
+        report["message"] = "Split, candidate windows, baseline, and train-only scaler inspected; GRU not trained."
+        (output / "training_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps(report, indent=2))
+        return 0
+
     if min(counts.values()) < args.min_windows:
         report["status"] = "insufficient_windows"
         report["message"] = (f"Require >= {args.min_windows} windows in EACH train/val/test split. "
@@ -299,6 +306,7 @@ def main():
     parser.add_argument("--lookback", type=int, default=60)
     parser.add_argument("--horizon", type=int, default=15)
     parser.add_argument("--min-windows", type=int, default=20)
+    parser.add_argument("--prepare-only", action="store_true", help="Audit splits and scaler without training GRU")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=32)
