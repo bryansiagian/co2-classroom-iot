@@ -10,6 +10,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -87,7 +88,7 @@ def valid_row(row: sqlite3.Row, return_reason: bool = False) -> bool | tuple[boo
 
 
 
-def resample(db_path: Path, room: str, expected: int, min_samples: int):
+def resample(db_path: Path, room: str, expected: int, min_samples: int, device_id: str | None = None):
     if not db_path.is_file():
         raise FileNotFoundError(f"Database tidak ditemukan: {db_path}")
 
@@ -96,10 +97,18 @@ def resample(db_path: Path, room: str, expected: int, min_samples: int):
     connection.row_factory = sqlite3.Row
 
     try:
-        rows = connection.execute("""
+        # Filter optional untuk menjaga kompatibilitas pemanggil lama.
+        # CLI mewajibkan device_id supaya tidak mencampur beberapa ESP32.
+        sql = """
             SELECT received_at, co2_ppm, temp_in_c, hum_in_pct, pir, quality_flags, faults
-            FROM sensor_reading WHERE room_id=? ORDER BY received_at, id
-        """, (room,)).fetchall()
+            FROM sensor_reading WHERE room_id=?
+        """
+        params = [room]
+        if device_id is not None:
+            sql += " AND device_id=?"
+            params.append(device_id)
+        sql += " ORDER BY received_at, id"
+        rows = connection.execute(sql, params).fetchall()
     finally:
         connection.close()
 
@@ -129,6 +138,7 @@ def resample(db_path: Path, room: str, expected: int, min_samples: int):
     if not parsed_times:
         report = {
             "room_id": room,
+            "device_id": device_id,
             "raw_rows": len(rows),
             "invalid_timestamps": invalid_timestamps,
             "samples_checked": 0,
@@ -199,6 +209,7 @@ def resample(db_path: Path, room: str, expected: int, min_samples: int):
 
     report = {
         "room_id": room,
+        "device_id": device_id,
         "source_database": str(db_path),
         "timestamp_source": "received_at (UTC)",
         "expected_samples_per_minute": expected,
@@ -228,3 +239,53 @@ def resample(db_path: Path, room: str, expected: int, min_samples: int):
     }
 
     return output, usable, report
+
+
+
+def write_csv(path: Path, rows: list[dict]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=HEADERS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Ekspor SQLite GD525 ke dataset per menit, terpisah per device_id"
+    )
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--room", default="gd525")
+    parser.add_argument("--device-id", required=True,
+                        help="Identitas perangkat, mis. esp32_gd525")
+    parser.add_argument("--expected", type=int, default=6)
+    parser.add_argument("--min-samples", type=int, default=5)
+    parser.add_argument("--out", type=Path, default=None,
+                        help="Folder keluaran; default development/<device-id>")
+    args = parser.parse_args()
+
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", args.device_id):
+        parser.error("--device-id hanya boleh huruf, angka, underscore, titik, atau minus (maks. 64 karakter)")
+    if args.expected < 1 or not 1 <= args.min_samples <= args.expected:
+        parser.error("--expected harus >= 1 dan 1 <= --min-samples <= --expected")
+
+    out_dir = args.out if args.out is not None else DEFAULT_OUT / args.device_id
+    all_minutes, usable, report = resample(
+        args.db, args.room, args.expected, args.min_samples, device_id=args.device_id
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_csv(out_dir / "all_minutes.csv", all_minutes)
+    write_csv(out_dir / "usable_minutes.csv", usable)
+    (out_dir / "resample_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"Device ID        : {args.device_id}")
+    print(f"Raw records      : {report['raw_rows']}")
+    print(f"Menit usable     : {report['minutes_usable']}/{report['minutes_total']}")
+    print(f"Menit incomplete : {report['minutes_incomplete']}")
+    print(f"Menit missing    : {report['minutes_missing']}")
+    print(f"Output           : {out_dir}")
+
+
+if __name__ == "__main__":
+    main()
