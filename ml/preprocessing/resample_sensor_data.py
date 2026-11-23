@@ -21,6 +21,8 @@ DEFAULT_DB = REPO_ROOT / "backend/backend/data/co2class.db"
 DEFAULT_OUT = REPO_ROOT / "ml/data/processed/development"
 HEADERS = ["minute_utc", "co2_ppm", "temp_in_c", "hum_in_pct", "pir", "n_received", "n_valid", "n_rejected", "coverage_pct", "status"]
 RANGES = {"co2_ppm": (350, 5000), "temp_in_c": (-10, 60), "hum_in_pct": (0, 100)}
+PROFILES = ("multivariate", "co2_only")
+DHT_FAULTS = {"temperature", "humidity"}
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -88,7 +90,44 @@ def valid_row(row: sqlite3.Row, return_reason: bool = False) -> bool | tuple[boo
 
 
 
-def resample(db_path: Path, room: str, expected: int, min_samples: int, device_id: str | None = None):
+def valid_co2_row(row: sqlite3.Row, return_reason: bool = False) -> bool | tuple[bool, str | None]:
+    """Check CO2 independently of DHT22; reject other faults and suspect flags."""
+    reason = None
+    try:
+        flags = json.loads(row["quality_flags"] or "[]")
+        faults = json.loads(row["faults"] or "[]")
+        if not isinstance(flags, list) or any(
+            str(flag).lower() == "suspect" or str(flag).lower().endswith("_suspect")
+            for flag in flags
+        ):
+            reason = "flag"
+        elif not isinstance(faults, list) or any(
+            not isinstance(fault, str) or fault.lower() not in DHT_FAULTS
+            for fault in faults
+        ):
+            reason = "fault"
+        else:
+            value = row["co2_ppm"]
+            lo, hi = RANGES["co2_ppm"]
+            if (isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    or not lo <= value <= hi):
+                reason = "range"
+    except (TypeError, ValueError, IndexError, KeyError, json.JSONDecodeError):
+        reason = "schema"
+    if return_reason:
+        return reason is None, reason
+    return reason is None
+
+
+def resample(db_path: Path, room: str, expected: int, min_samples: int,
+             device_id: str | None = None, profile: str = "multivariate"):
+    if profile not in PROFILES:
+        raise ValueError(f"Profile tidak dikenal: {profile}")
+    if expected < 1 or not 1 <= min_samples <= expected:
+        raise ValueError("expected >= 1 dan 1 <= min_samples <= expected")
+
     if not db_path.is_file():
         raise FileNotFoundError(f"Database tidak ditemukan: {db_path}")
 
@@ -135,10 +174,13 @@ def resample(db_path: Path, room: str, expected: int, min_samples: int, device_i
         "schema": 0,
     }
 
+    validator = valid_co2_row if profile == "co2_only" else valid_row
+
     if not parsed_times:
         report = {
             "room_id": room,
             "device_id": device_id,
+            "profile": profile,
             "raw_rows": len(rows),
             "invalid_timestamps": invalid_timestamps,
             "samples_checked": 0,
@@ -169,7 +211,7 @@ def resample(db_path: Path, room: str, expected: int, min_samples: int, device_i
 
         for row in source:
             samples_checked += 1
-            is_valid, reason = valid_row(row, return_reason=True)
+            is_valid, reason = validator(row, return_reason=True)
 
             if is_valid:
                 valid.append(row)
@@ -193,9 +235,9 @@ def resample(db_path: Path, room: str, expected: int, min_samples: int, device_i
         output.append({
             "minute_utc": cursor.isoformat().replace("+00:00", "Z"),
             "co2_ppm": round(sum(r["co2_ppm"] for r in valid) / n, 3) if n else "",
-            "temp_in_c": round(sum(r["temp_in_c"] for r in valid) / n, 3) if n else "",
-            "hum_in_pct": round(sum(r["hum_in_pct"] for r in valid) / n, 3) if n else "",
-            "pir": max(r["pir"] for r in valid) if n else "",
+            "temp_in_c": round(sum(r["temp_in_c"] for r in valid) / n, 3) if n and profile == "multivariate" else "",
+            "hum_in_pct": round(sum(r["hum_in_pct"] for r in valid) / n, 3) if n and profile == "multivariate" else "",
+            "pir": max(r["pir"] for r in valid) if n and profile == "multivariate" else "",
             "n_received": len(source),
             "n_valid": n,
             "n_rejected": len(source) - n,
@@ -210,6 +252,7 @@ def resample(db_path: Path, room: str, expected: int, min_samples: int, device_i
     report = {
         "room_id": room,
         "device_id": device_id,
+        "profile": profile,
         "source_database": str(db_path),
         "timestamp_source": "received_at (UTC)",
         "expected_samples_per_minute": expected,
@@ -234,7 +277,8 @@ def resample(db_path: Path, room: str, expected: int, min_samples: int, device_i
         "warnings": [
             "Data development; jangan diklaim sebagai pengukuran resmi GD525.",
             "Tidak ada interpolasi; putuskan segmen kontinu sebelum membuat window GRU.",
-            "Baris dengan faults non-empty atau quality_flags suspect ditolak.",
+            ("Mode multivariate menolak semua faults; mode co2_only menerima hanya faults DHT22 dan mengosongkan fitur non-CO2."),
+            "Flag suspect selalu ditolak.",
             "received_at bukan waktu pengukuran ESP32; ts_corrected diperbolehkan."],
     }
 
@@ -257,6 +301,9 @@ def main() -> None:
     parser.add_argument("--room", default="gd525")
     parser.add_argument("--device-id", required=True,
                         help="Identitas perangkat, mis. esp32_gd525")
+    parser.add_argument("--profile", choices=("multivariate", "co2_only", "both"),
+                        default="multivariate",
+                        help="Mode lama multivariate, CO2 saja, atau kedua mode")
     parser.add_argument("--expected", type=int, default=6)
     parser.add_argument("--min-samples", type=int, default=5)
     parser.add_argument("--out", type=Path, default=None,
@@ -268,23 +315,30 @@ def main() -> None:
     if args.expected < 1 or not 1 <= args.min_samples <= args.expected:
         parser.error("--expected harus >= 1 dan 1 <= --min-samples <= --expected")
 
-    out_dir = args.out if args.out is not None else DEFAULT_OUT / args.device_id
-    all_minutes, usable, report = resample(
-        args.db, args.room, args.expected, args.min_samples, device_id=args.device_id
-    )
-    out_dir.mkdir(parents=True, exist_ok=True)
-    write_csv(out_dir / "all_minutes.csv", all_minutes)
-    write_csv(out_dir / "usable_minutes.csv", usable)
-    (out_dir / "resample_report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    print(f"Device ID        : {args.device_id}")
-    print(f"Raw records      : {report['raw_rows']}")
-    print(f"Menit usable     : {report['minutes_usable']}/{report['minutes_total']}")
-    print(f"Menit incomplete : {report['minutes_incomplete']}")
-    print(f"Menit missing    : {report['minutes_missing']}")
-    print(f"Output           : {out_dir}")
+    base_dir = args.out if args.out is not None else DEFAULT_OUT / args.device_id
+    profiles = PROFILES if args.profile == "both" else (args.profile,)
+    for profile in profiles:
+        # Original path retained for legacy multivariate-only execution.
+        out_dir = (base_dir / profile) if args.profile == "both" else base_dir
+        all_minutes, usable, report = resample(
+            args.db, args.room, args.expected, args.min_samples,
+            device_id=args.device_id, profile=profile
+        )
+        out_dir.mkdir(parents=True, exist_ok=True)
+        write_csv(out_dir / "all_minutes.csv", all_minutes)
+        write_csv(out_dir / "usable_minutes.csv", usable)
+        (out_dir / "resample_report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"Profile          : {profile}")
+        print(f"Device ID        : {args.device_id}")
+        print(f"Raw records      : {report['raw_rows']}")
+        print(f"Menit usable     : {report['minutes_usable']}/{report['minutes_total']}")
+        print(f"Menit incomplete : {report['minutes_incomplete']}")
+        print(f"Menit missing    : {report['minutes_missing']}")
+        print(f"Output           : {out_dir}")
+        print()
 
 
 if __name__ == "__main__":
