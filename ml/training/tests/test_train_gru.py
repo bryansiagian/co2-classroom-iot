@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from train_gru import FEATURES, StandardScaler, evaluate, make_windows, split_by_usable_time, split_by_fixed_boundaries
+from train_gru import FEATURES, StandardScaler, evaluate, make_windows, split_by_usable_time, split_by_fixed_boundaries, align_test_targets
 
 
 def minutes(n=600):
@@ -64,6 +64,21 @@ class TestTrainingData(unittest.TestCase):
         self.assertEqual(len(scaler.transform((400.0,))), 1)
         with self.assertRaisesRegex(ValueError, "feature count"):
             scaler.transform((400.0, 26.0))
+
+    def test_canonical_test_labels_and_timestamp_matching(self):
+        multi = make_windows(minutes(100), 15, 15)
+        one_feature = []
+        for w in multi:
+            data = [tuple([r[0]]) for r in w[0]]
+            one_feature.append((data, w[1] + 2.0, w[2], w[3], w[4]))
+        aligned, audit = align_test_targets(one_feature, multi)
+        self.assertEqual(len(aligned), len(multi))
+        self.assertEqual([w[1] for w in aligned], [w[1] for w in multi])
+        self.assertEqual(aligned[0][0][0], (400.0,))
+        self.assertEqual(audit["changed_target_values"], len(multi))
+        self.assertEqual(audit["maximum_absolute_target_difference_ppm"], 2.0)
+        with self.assertRaisesRegex(ValueError, "timestamps differ"):
+            align_test_targets(one_feature[:-1], multi)
 
     def test_persistence_metrics(self):
         self.assertEqual(evaluate([100., 105.], [100., 100.])["MAE_ppm"], 2.5)
