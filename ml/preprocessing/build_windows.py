@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT = REPO_ROOT / 'ml/data/processed/development/all_minutes.csv'
 DEFAULT_OUTPUT = REPO_ROOT / 'ml/data/processed/development/windows'
 FEATURES = ('co2_ppm', 'temp_in_c', 'hum_in_pct', 'pir')
+PROFILE_FEATURES = {'multivariate': FEATURES, 'co2_only': ('co2_ppm',)}
 INDEX_FIELDS = ('window_id', 'input_start_utc', 'input_end_utc', 'target_utc', 'target_co2_ppm')
 
 
@@ -30,13 +31,16 @@ def parse_utc(value: str) -> datetime:
     return dt
 
 
-def load_minutes(path: Path) -> list[dict]:
+def load_minutes(path: Path, profile: str = 'multivariate') -> list[dict]:
+    if profile not in PROFILE_FEATURES:
+        raise ValueError(f'Profile tidak dikenal: {profile}')
+    features_to_use = PROFILE_FEATURES[profile]
     if not path.is_file():
         raise FileNotFoundError(f'CSV tidak ditemukan: {path}')
     result = []
     with path.open(newline='', encoding='utf-8-sig') as file:
         reader = csv.DictReader(file)
-        required = {'minute_utc', 'status', *FEATURES}
+        required = {'minute_utc', 'status', *features_to_use}
         if not reader.fieldnames or not required.issubset(reader.fieldnames):
             raise ValueError(f'Kolom CSV wajib: {sorted(required)}')
         for number, row in enumerate(reader, start=2):
@@ -48,14 +52,14 @@ def load_minutes(path: Path) -> list[dict]:
             features = None
             if usable:
                 try:
-                    features = [float(row[name]) for name in FEATURES]
+                    features = [float(row[name]) for name in features_to_use]
                 except (TypeError, ValueError) as exc:
                     raise ValueError(f'Baris {number}: fitur usable invalid: {exc}') from exc
                 if not all(math.isfinite(x) for x in features):
                     raise ValueError(f'Baris {number}: fitur usable non-finite')
-                if features[3] not in (0, 1):
+                if profile == 'multivariate' and features[3] not in (0, 1):
                     raise ValueError(f'Baris {number}: PIR bukan 0/1')
-            result.append({'ts': ts, 'usable': usable, 'x': features})
+            result.append({'ts': ts, 'usable': usable, 'x': features, 'feature_order': features_to_use})
     for prev, curr in zip(result, result[1:]):
         if prev['ts'] >= curr['ts']:
             raise ValueError('CSV harus urut waktu naik dan timestamp unik')
@@ -96,7 +100,7 @@ def generate_windows(minutes: list[dict], lookback: int = 60, horizon: int = 15,
                 'input_start_utc': inputs[0]['ts'].isoformat().replace('+00:00', 'Z'),
                 'input_end_utc': inputs[-1]['ts'].isoformat().replace('+00:00', 'Z'),
                 'target_utc': target['ts'].isoformat().replace('+00:00', 'Z'),
-                'features': list(FEATURES),
+                'features': list(inputs[0]['feature_order']),
                 'X': [row['x'] for row in inputs],
                 'y_co2_ppm': target['x'][0],
             })
@@ -104,12 +108,14 @@ def generate_windows(minutes: list[dict], lookback: int = 60, horizon: int = 15,
 
 
 def build_report(minutes: list[dict], windows: list[dict], lookback: int,
-                 horizon: int, stride: int, source: Path) -> dict:
+                 horizon: int, stride: int, source: Path,
+                 profile: str = 'multivariate') -> dict:
     segments = split_segments(minutes)
     return {
         'source_csv': str(source.resolve()),
         'dataset_type': 'development (jangan digunakan sebagai data resmi GD525)',
-        'feature_order': list(FEATURES),
+        'profile': profile,
+        'feature_order': list(PROFILE_FEATURES[profile]),
         'input_minutes': lookback,
         'target_horizon_minutes': horizon,
         'stride_minutes': stride,
@@ -129,10 +135,11 @@ def build_report(minutes: list[dict], windows: list[dict], lookback: int,
     }
 
 
-def export(input_path: Path, output_dir: Path, lookback: int, horizon: int, stride: int) -> dict:
-    minutes = load_minutes(input_path)
+def export(input_path: Path, output_dir: Path, lookback: int, horizon: int,
+           stride: int, profile: str = 'multivariate') -> dict:
+    minutes = load_minutes(input_path, profile=profile)
     windows = generate_windows(minutes, lookback, horizon, stride)
-    report = build_report(minutes, windows, lookback, horizon, stride, input_path)
+    report = build_report(minutes, windows, lookback, horizon, stride, input_path, profile)
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / 'windows.jsonl').open('w', encoding='utf-8') as file:
         for window in windows:
@@ -155,10 +162,11 @@ def main() -> None:
     parser.add_argument('--lookback', type=int, default=60)
     parser.add_argument('--horizon', type=int, default=15)
     parser.add_argument('--stride', type=int, default=1)
+    parser.add_argument('--profile', choices=tuple(PROFILE_FEATURES), default='multivariate')
     args = parser.parse_args()
     if min(args.lookback, args.horizon, args.stride) < 1:
         parser.error('--lookback, --horizon, --stride harus >= 1')
-    report = export(args.input, args.out_dir, args.lookback, args.horizon, args.stride)
+    report = export(args.input, args.out_dir, args.lookback, args.horizon, args.stride, args.profile)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     print(f'Output: {args.out_dir.resolve()}')
 
