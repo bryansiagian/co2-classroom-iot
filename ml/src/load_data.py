@@ -68,25 +68,32 @@ def _sniff_kind(path: Path) -> str:
 
 def _read_csv_text(path: Path) -> pd.DataFrame:
     text, enc = _decode(path)
-    # Buang semua tanda kutip (kutip pembungkus baris / kutip nyasar), samakan akhir baris
-    text = text.replace('"', "").replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
     lines = [ln for ln in text.split("\n") if ln.strip()]
-    if lines and lines[0].strip().lower().startswith("sep="):  # petunjuk Excel
+    if lines and lines[0].strip().lower().startswith("sep="):
         lines = lines[1:]
+
     if not lines:
         raise SystemExit("File CSV kosong.")
+
     sep = _pick_delimiter(lines[0])
     sample = "\n".join(lines[1:200])
     decimal = "."
     if sep != "," and re.search(r"\d,\d", sample) and not re.search(r"\d\.\d", sample):
         decimal = ","
-    print(f"[info] CSV: encoding={enc} pemisah={sep!r} desimal={decimal!r} baris={len(lines) - 1}")
+
+    print(
+        f"[info] CSV: encoding={enc} "
+        f"pemisah={sep!r} desimal={decimal!r} baris={len(lines) - 1}"
+    )
+
     return pd.read_csv(
         io.StringIO("\n".join(lines)),
         sep=sep,
         decimal=decimal,
         engine="python",
-        on_bad_lines="warn",
+        on_bad_lines="error",
     )
 
 
