@@ -79,6 +79,50 @@ class TestResample(unittest.TestCase):
             self.assertEqual(report['minutes_missing'], 1)
             self.assertEqual(report['raw_rows'], 12)
 
+    def test_device_filter_does_not_mix_sensors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "devices.db"
+            con = sqlite3.connect(db)
+            con.execute("""
+                CREATE TABLE sensor_reading (
+                    id INTEGER PRIMARY KEY, room_id TEXT, device_id TEXT,
+                    received_at TEXT, co2_ppm INTEGER, temp_in_c REAL,
+                    hum_in_pct REAL, pir INTEGER, quality_flags TEXT, faults TEXT
+                )
+            """)
+            for seconds in (0, 10, 20, 30, 40, 50):
+                for device, co2 in (("esp32_gd525", 500), ("esp32_gd525_02", 1500)):
+                    con.execute("""
+                        INSERT INTO sensor_reading (
+                            room_id, device_id, received_at, co2_ppm,
+                            temp_in_c, hum_in_pct, pir, quality_flags, faults
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, ("gd525", device, f"2026-11-09T11:01:{seconds:02}Z",
+                          co2, 26.0, 74.0, 0, "[]", "[]"))
+            # Menit pertama dan terakhir sengaja disediakan sebagai boundary.
+            for minute in (0, 2):
+                for device in ("esp32_gd525", "esp32_gd525_02"):
+                    con.execute("""
+                        INSERT INTO sensor_reading (
+                            room_id, device_id, received_at, co2_ppm,
+                            temp_in_c, hum_in_pct, pir, quality_flags, faults
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, ("gd525", device, f"2026-11-09T11:{minute:02}:00Z",
+                          600, 26.0, 74.0, 0, "[]", "[]"))
+            con.commit()
+            con.close()
+
+            _, usable_one, report_one = resample(db, "gd525", 6, 5, device_id="esp32_gd525")
+            _, usable_two, report_two = resample(db, "gd525", 6, 5, device_id="esp32_gd525_02")
+            self.assertEqual(len(usable_one), 1)
+            self.assertEqual(len(usable_two), 1)
+            self.assertEqual(usable_one[0]["co2_ppm"], 500)
+            self.assertEqual(usable_two[0]["co2_ppm"], 1500)
+            self.assertEqual(report_one["raw_rows"], 8)
+            self.assertEqual(report_two["raw_rows"], 8)
+            self.assertEqual(report_one["device_id"], "esp32_gd525")
+            self.assertEqual(report_two["device_id"], "esp32_gd525_02")
+
     def test_valid_row_missing_column_returns_false(self):
         columns = {
             "quality_flags": "[]",
