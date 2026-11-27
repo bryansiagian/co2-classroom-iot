@@ -1,4 +1,4 @@
-"""Langkah 6: latih dan bandingkan Persistence, LSTM, GRU.
+"""Langkah 6: latih dan bandingkan Persistence, GRU.
 
 Contoh:
     python -m src.train                       # mode dari env DATA_MODE (default demo)
@@ -7,7 +7,7 @@ Contoh:
     python -m src.train --mode real
 
 Keluaran (di models/<mode>/ dan reports/<mode>/):
-    models/<mode>/<gru|lstm>/model.pt, scaler.json, meta.json, test_predictions.npz
+    models/<mode>/<gru>/model.pt, scaler.json, meta.json, test_predictions.npz
     models/<mode>/persistence/test_predictions.npz
     reports/<mode>/comparison.csv, comparison.md, per_horizon_<model>.csv, history_<model>_N<w>.csv
 """
@@ -189,7 +189,7 @@ def main() -> None:
     np.savez(pdir / "test_predictions.npz", pred=p_pers, actual=Yte_raw, t_end=te_test.astype("datetime64[ns]"))
     metrics.per_horizon(Yte_raw, p_pers).to_csv(p["reports_dir"] / "per_horizon_persistence.csv", index=False)
 
-    # --- LSTM / GRU --------------------------------------------------------
+    # ---  GRU --------------------------------------------------------
     for kind in a.models:
         for N in a.windows:
             set_seed(a.seed)

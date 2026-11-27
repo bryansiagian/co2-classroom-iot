@@ -11,7 +11,7 @@ Definisi:
   CO2 aktual >= ambang dalam 15 menit sesudahnya.
 
 Contoh:
-    python -m src.evaluate --models gru lstm persistence
+    python -m src.evaluate --models gru persistence
 """
 from __future__ import annotations
 

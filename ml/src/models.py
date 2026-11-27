@@ -1,4 +1,4 @@
-"""Langkah 6: model. Persistence (garis dasar), LSTM, dan GRU (PyTorch)."""
+"""Langkah 6: model. Persistence (garis dasar), dan GRU (PyTorch)."""
 from __future__ import annotations
 
 import numpy as np
@@ -23,7 +23,7 @@ class Persistence:
 
 
 class RNNForecaster(nn.Module):
-    """RNN (LSTM/GRU) -> Linear(horizon). Keluaran: CO2 terskala untuk t+1..t+horizon."""
+    """RNN (GRU) -> Linear(horizon). Keluaran: CO2 terskala untuk t+1..t+horizon."""
 
     def __init__(
         self,
@@ -36,11 +36,10 @@ class RNNForecaster(nn.Module):
     ):
         super().__init__()
         kind = kind.lower()
-        if kind not in {"lstm", "gru"}:
-            raise ValueError("kind harus 'lstm' atau 'gru'")
-        rnn_cls = nn.LSTM if kind == "lstm" else nn.GRU
+        if kind != "gru":
+            raise ValueError("Hanya model GRU yang didukung")
         self.kind = kind
-        self.rnn = rnn_cls(
+        self.rnn = nn.GRU(
             input_size=n_features,
             hidden_size=hidden,
             num_layers=layers,
