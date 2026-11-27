@@ -1,4 +1,4 @@
-# ml/ — Prediksi CO₂ t+15 menit (LSTM/GRU) untuk TA
+# ml/ — Prediksi CO₂ t+15 menit (GRU) untuk TA
 
 Folder ini berisi seluruh alur data → model → evaluasi. Satu kode untuk dua mode:
 `demo` (dataset yang sudah ada) dan `real` (data dari alat). Yang berganti hanya data dan model.
@@ -13,7 +13,7 @@ ml/
 │   ├── demo/              # taruh dataset demo (CSV/XLSX) di sini
 │   ├── real/              # data dari alat (nanti)
 │   └── processed/<mode>/  # hasil pembersihan (clean.csv)
-├── models/<mode>/         # model + scaler + meta (gru/, lstm/, persistence/)
+├── models/<mode>/         # model + scaler + meta (gru/, persistence/)
 ├── reports/<mode>/        # audit, tabel metrik, grafik
 ├── notebooks/             # eksplorasi bebas
 └── src/
@@ -23,7 +23,7 @@ ml/
     ├── audit.py           # audit kualitas data
     ├── clean.py           # rapikan ke 1 menit + tandai data hasil isian
     ├── windows.py         # jendela N menit, split kronologis, scaler dari train saja
-    ├── models.py          # Persistence, LSTM, GRU (PyTorch)
+    ├── models.py          # Persistence, GRU (PyTorch)
     ├── metrics.py         # MAE, RMSE, R2 (+ per langkah t+1..t+15)
     ├── train.py           # latih + bandingkan
     ├── evaluate.py        # grafik + evaluasi proaktif vs reaktif
@@ -59,7 +59,7 @@ python -m src.audit
 # 3. Bersihkan       -> data/processed/demo/clean.csv, reports/demo/clean.md
 python -m src.clean
 
-# 4. Latih + bandingkan Persistence / LSTM / GRU (N = 15, 30, 60)
+# 4. Latih + bandingkan Persistence / GRU (N = 15, 30, 60)
 python -m src.train --windows 15 30 60 --epochs 60
 
 # 5. Grafik + evaluasi proaktif vs reaktif
