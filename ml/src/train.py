@@ -113,7 +113,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Latih dan bandingkan model")
     ap.add_argument("--mode", default=None)
     ap.add_argument("--windows", type=int, nargs="+", default=config.WINDOW_CANDIDATES)
-    ap.add_argument("--models", nargs="+", default=["lstm", "gru"])
+    ap.add_argument("--models", nargs="+", default=["gru"])
     ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--batch", type=int, default=128)
     ap.add_argument("--lr", type=float, default=1e-3)
