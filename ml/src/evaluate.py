@@ -128,7 +128,7 @@ def plot_horizon(curves: dict[str, pd.DataFrame], out_png, mode):
 def main() -> None:
     ap = argparse.ArgumentParser(description="Evaluasi dan grafik")
     ap.add_argument("--mode", default=None)
-    ap.add_argument("--models", nargs="+", default=["gru", "lstm", "persistence"])
+    ap.add_argument("--models", nargs="+", default=["gru", "persistence"])
     ap.add_argument("--days", type=float, default=3.0)
     a = ap.parse_args()
     mode = config.get_mode(a.mode)
