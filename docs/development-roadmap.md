@@ -54,7 +54,7 @@ Menghasilkan sistem berbasis IoT yang membaca kondisi ruang GD525, memprediksi C
 - [ ] Tetapkan panjang lookback dan fitur input.
 - [ ] Pelatihan/tuning GRU hanya memakai rentang train/validation.
 - [ ] Evaluasi MAE, RMSE, R² dan hasil prediksi t+15.
-- [ ] Bandingkan terhadap persistence dan, jika relevan.
+- [ ] Bandingkan GRU terhadap baseline persistence.
 - [ ] Evaluasi crossing threshold, precision/recall/F1 dan lead time.
 - [ ] Pertimbangkan hysteresis dan risiko false alarm.
 - [ ] Catat versi model, data split, seed dan konfigurasi eksperimen.
